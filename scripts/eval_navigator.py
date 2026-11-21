@@ -63,10 +63,12 @@ class ModelNavigator:
 
 
 def make_navigator(name: str):
-    from submarine.navigator import GreedyNavigator, RandomNavigator
+    from submarine.navigator import GreedyNavigator, OracleNavigator, RandomNavigator
 
     if name == "greedy":
         return GreedyNavigator()
+    if name == "oracle":
+        return OracleNavigator()
     if name == "random":
         return RandomNavigator()
     return ModelNavigator(name)
@@ -77,6 +79,8 @@ def run_episode(env, nav, cave_seed: int, difficulty: float):
 
     obs, info = env.reset(seed=episode_seed(cave_seed, difficulty), options={"cave_seed": cave_seed,
                                                                               "difficulty": difficulty})
+    if hasattr(nav, "attach"):
+        nav.attach(env)                                   # privileged reference navigators read the true map
     nav.reset()
     ret = 0.0
     while True:

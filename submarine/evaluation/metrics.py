@@ -1,4 +1,4 @@
-﻿"""Run policies on held-out caves and compute the metrics in context.md, section 7."""
+"""Run policies on held-out caves and compute the metrics in context.md, section 7."""
 
 from __future__ import annotations
 

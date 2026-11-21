@@ -37,6 +37,76 @@ def deep_merge(a: dict, b: dict) -> dict:
     return out
 
 
+def warm_start(model, demos_path: str, bc: dict, gamma: float, recurrent: bool, log):
+    """Behaviour cloning of the map-aware teacher's choices (scripts.collect_nav_demos), plus value pretraining on
+    the discounted returns of the demonstration episodes. Recurrent policies train on consecutive chunks of
+    `seq_len` decisions (state reset at each chunk start), through the same forward pass PPO uses."""
+    import torch as th
+
+    d = np.load(demos_path)
+    obs, label, rew, start = d["obs"], d["label"], d["reward"], d["start"]
+    ret = np.zeros_like(rew)
+    g = 0.0
+    for i in range(len(rew) - 1, -1, -1):                    # discounted return within each episode
+        g = rew[i] + gamma * g
+        ret[i] = g
+        if start[i]:
+            g = 0.0
+    L = int(bc.get("seq_len", 64)) if recurrent else 1
+    n_chunks = len(obs) // L
+    idx = np.arange(n_chunks * L).reshape(n_chunks, L)
+    rng = np.random.default_rng(0)
+    perm = rng.permutation(n_chunks)
+    n_val = max(1, n_chunks // 10)
+    val, train = perm[:n_val], perm[n_val:]
+    pol = model.policy
+    opt = th.optim.Adam(pol.parameters(), lr=float(bc.get("lr", 1e-3)))
+    batch = int(bc.get("batch_seqs", 16)) if recurrent else int(bc.get("batch", 512))
+
+    def run(chunks, grad: bool):
+        rows = idx[chunks].reshape(-1)
+        o = th.as_tensor(obs[rows])
+        a = th.as_tensor(label[rows])
+        r = th.as_tensor(ret[rows])
+        with th.set_grad_enabled(grad):
+            if recurrent:
+                from sb3_contrib.common.recurrent.type_aliases import RNNStates
+
+                n = len(chunks)
+                hs = lambda m: (th.zeros(1, n, m.hidden_size), th.zeros(1, n, m.hidden_size))
+                states = RNNStates(hs(pol.lstm_actor), hs(pol.lstm_critic))
+                st = th.as_tensor(start[rows].astype(np.float32)).view(n, L)
+                st[:, 0] = 1.0
+                v, logp, _ = pol.evaluate_actions(o, a, states, st.reshape(-1))
+            else:
+                v, logp, _ = pol.evaluate_actions(o, a)
+            pi_loss = -logp.mean()
+            v_loss = th.nn.functional.mse_loss(v.flatten(), r)
+            acc = None
+            if not grad:
+                dist = pol.get_distribution(o, states.pi, st.reshape(-1))[0] if recurrent else pol.get_distribution(o)
+                acc = float((dist.distribution.probs.argmax(1) == a).float().mean())
+        return pi_loss, v_loss, acc
+
+    for epoch in range(int(bc.get("epochs", 8))):
+        rng.shuffle(train)
+        lp = lv = 0.0
+        nb = 0
+        for b in range(0, len(train), batch):
+            pi_loss, v_loss, _ = run(train[b:b + batch], True)
+            loss = pi_loss + float(bc.get("vf_coef", 0.05)) * v_loss
+            opt.zero_grad()
+            loss.backward()
+            th.nn.utils.clip_grad_norm_(pol.parameters(), 0.5)
+            opt.step()
+            lp += float(pi_loss)
+            lv += float(v_loss)
+            nb += 1
+        vp, vv, acc = run(val, False)
+        log(f"warm start epoch {epoch + 1}: train NLL {lp / nb:.3f} value MSE {lv / nb:.1f} | held-out NLL "
+            f"{float(vp):.3f} value MSE {float(vv):.1f} teacher agreement {100 * acc:.0f}%")
+
+
 def stage_config(base: dict, stage: dict):
     from submarine.navigator import NavigatorEnvConfig
 
@@ -52,6 +122,8 @@ def main():
     p.add_argument("--threads", type=int, default=4)
     p.add_argument("--workers", type=int, default=None, help="override worker processes (envs stay the same)")
     p.add_argument("--driver", default=None, help="override base.driver_actor (path to a driver .npz)")
+    p.add_argument("--demos", default=None, help="override bc.demos (teacher demonstrations for the warm start)")
+    p.add_argument("--no-warm-start", action="store_true")
     args = p.parse_args()
 
     with open(args.config, encoding="utf-8") as f:
@@ -114,6 +186,12 @@ def main():
     n_params = sum(p_.numel() for p_ in model.policy.parameters())
     log(f"memory={args.memory}: {n_params} parameters, {n_envs} envs on {n_envs // k} workers, "
         f"stages {[s['name'] for s in stages]}")
+    demos = args.demos or C.get("bc", {}).get("demos")
+    if demos and not args.no_warm_start:
+        if not Path(demos).exists():
+            raise FileNotFoundError(f"demonstrations {demos} not found (run scripts.collect_nav_demos first)")
+        warm_start(model, demos, dict(C.get("bc", {})), float(algo.get("gamma", 0.99)), policy is not None, log)
+        model.save(run / "b0_warm_start.zip")
 
     summary = {"memory": args.memory, "parameters": n_params, "stages": []}
     for i, stage in enumerate(stages):

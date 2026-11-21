@@ -1,4 +1,4 @@
-﻿from .callbacks import CurriculumCallback, ValidationCallback
+from .callbacks import CurriculumCallback, ValidationCallback
 from .config import EvalSettings, TrainConfig
 from .factory import load_run, make_model, make_train_env
 

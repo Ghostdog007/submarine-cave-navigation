@@ -1,4 +1,4 @@
-﻿# Step 1: camera only (ablation), murky water, realistic sonar ping rate.
+# Step 1: camera only (ablation), murky water, realistic sonar ping rate.
 # Compare with ppo_sonar_murky.yaml and ppo_camera_murky.yaml (identical except `sensors`).
 name: ppo_camera_murky
 algo: ppo

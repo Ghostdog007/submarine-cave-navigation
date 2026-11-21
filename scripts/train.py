@@ -1,4 +1,4 @@
-﻿"""Train an agent from a YAML config.
+"""Train an agent from a YAML config.
 
     python -m scripts.train --config configs/ppo_d0.yaml
     python -m scripts.train --config configs/ppo_d0.yaml --seed 1 --timesteps 200000 --name quick_test

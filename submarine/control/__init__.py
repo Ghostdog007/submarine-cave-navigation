@@ -1,4 +1,4 @@
-﻿"""Driver: tracking controller + built-in safety filter + openings detector (two-level architecture).
+"""Driver: tracking controller + built-in safety filter + openings detector (two-level architecture).
 
 Phase A0 is the hand-written controller; the learned driver (phases A1-A3) replaces only the controller.
 """

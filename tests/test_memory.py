@@ -98,3 +98,34 @@ def test_recurrent_ppo_trains_saves_and_loads(tmp_path, policy):
     a1, s1 = model.predict(obs, deterministic=True, episode_start=np.ones(2, bool))
     a2, s2 = loaded.predict(obs, deterministic=True, episode_start=np.ones(2, bool))
     assert np.array_equal(a1, a2) and np.allclose(s1[1], s2[1])
+
+
+def test_rewriting_the_same_place_updates_its_slot():
+    """Phase B: a navigator stuck at a dead end wrote it at every decision, filling all slots with copies and
+    evicting every junction. A write within merge_radius of a stored slot must update that slot instead."""
+    th.manual_seed(0)
+    m = JunctionMemory(OBS_DIM, IDX, n_slots=3)
+    st = zeros(m, 1)
+
+    def step(x_pos, prev=None, dead=False):
+        nonlocal st
+        x = th.zeros(1, 1, OBS_DIM)
+        x[0, 0, IDX["x"]], x[0, 0, IDX["y"]] = x_pos
+        if prev is not None:
+            x[0, 0, IDX["prev_junction"]] = 1.0
+            x[0, 0, IDX["prev_x"]], x[0, 0, IDX["prev_y"]] = prev
+        x[0, 0, IDX["dead_end"]] = float(dead)
+        _, st = m(x, st)
+
+    def slots():
+        K, D, M = m.n_slots, m.slot_dim, m.memo_dim
+        return st[1][0, 0, m.state_size:m.state_size + K * D].reshape(K, D)[:, M:M + 3]
+
+    step((0.1, 0.0), prev=(0.0, 0.0))                     # junction A at (0, 0)
+    step((0.3, 0.0), prev=(0.2, 0.0))                     # junction B at (0.2, 0) = 5 m away
+    for k in range(6):                                    # stuck at a dead end: written at every decision
+        step((0.6 + 0.004 * k, 0.0), dead=True)           # (drifting 10 cm per decision)
+    s = slots()
+    assert int(s[:, 2].sum()) == 3                        # A, B and ONE dead-end slot
+    xs = sorted(round(v, 2) for v in s[:, 0].tolist())
+    assert xs[:2] == [0.0, 0.2] and abs(xs[2] - 0.62) < 0.01   # junctions kept; the dead end holds its last write

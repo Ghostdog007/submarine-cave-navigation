@@ -20,11 +20,21 @@ ppo:
 memory:                           # small: memory only has to choose exits
   retention: {hidden_size: 256, d_model: 64, n_heads: 4, d_k: 8, d_v: 8, gammas: [0.5, 0.8, 0.95, 0.99]}
   junction: {hidden_size: 512, d_model: 64, n_heads: 4, d_k: 8, d_v: 8, gammas: [0.5, 0.8, 0.95, 0.99],
-             n_slots: 8, memo_dim: 21}
+             n_slots: 8, memo_dim: 21, merge_radius: 0.08}    # writes within 2 m update the same slot
+
+bc:                               # warm start: imitate the map-aware teacher (scripts.collect_nav_demos)
+  demos: runs/nav_demos.npz       # 40k decisions, 30% random valid exits executed (labels: the teacher's)
+  epochs: 8
+  lr: 1.0e-3
+  seq_len: 64                     # recurrent: chunks of 64 decisions, like PPO's rollouts
+  batch_seqs: 16
+  batch: 512                      # MLP
+  vf_coef: 0.05                   # returns are O(10): keep the value loss from swamping the imitation loss
 
 base:
   driver_actor: runs/driver/driver.npz
   cruise_speed: 1.2
+  empty_slot: remap               # every decision is a real exit or a turn-back (v1 runs: carry_on)
   env:
     max_steps: 1500
     sonar: {ping_interval: 0.4}

@@ -67,9 +67,19 @@ class MemoryTrace:
 
         st = self.env.base.sim.state
         prev = {(m["slot"], m["nav"]): m for m in self.markers}
+        by_slot = {m["slot"]: m for m in self.markers}
+        merge = 25.0 * float(getattr(self.module, "merge_radius", 0.0))      # metres
         slots = self._slots()
         kept = [dict(prev[(s["slot"], s["nav"])], age=s["age"]) for s in slots if (s["slot"], s["nav"]) in prev]
-        new = [s for s in slots if (s["slot"], s["nav"]) not in prev]
+        new, updated = [], []
+        for s in slots:
+            if (s["slot"], s["nav"]) in prev:
+                continue
+            old = by_slot.get(s["slot"])
+            if old is not None and np.hypot(s["nav"][0] - old["nav"][0], s["nav"][1] - old["nav"][1]) < merge:
+                updated.append((s, old))                  # same place, written again: merged into its slot
+            else:
+                new.append(s)
         # what was written now, and where (navigation frame, metres): junction left at the previous decision's
         # position; dead end at the current position
         events = []
@@ -80,15 +90,25 @@ class MemoryTrace:
         if obs_in[OBS["dead_end"]] > 0.5:
             events.append(("dead end", "dead end", (obs_in[OBS["x"]] * 25.0, obs_in[OBS["y"]] * 25.0),
                            (st.x, st.y)))
+        dist = lambda a, pos: (a[0] - pos[0]) ** 2 + (a[1] - pos[1]) ** 2
         for kind, text, pos, true in events:          # junction first: the module writes in that order
-            if not new:
-                break
-            s = min(new, key=lambda s: (s["nav"][0] - pos[0]) ** 2 + (s["nav"][1] - pos[1]) ** 2)
-            new.remove(s)
-            self.n_written += 1
-            kept.append({**s, "idx": self.n_written, "dead_end": kind == "dead end", "true": true})
-            self.log.append((t, f"STORED #{self.n_written}: {text}"))
-        self.unexplained += len(new)                  # must stay 0 (checked by the tests)
+            if new:
+                s = min(new, key=lambda s: dist(s["nav"], pos))
+                new.remove(s)
+                self.n_written += 1
+                kept.append({**s, "idx": self.n_written, "dead_end": kind == "dead end", "true": true})
+                self.log.append((t, f"STORED #{self.n_written}: {text}"))
+            elif updated:
+                s, old = min(updated, key=lambda so: dist(so[0]["nav"], pos))
+                updated.remove((s, old))
+                kept.append({**old, **s, "dead_end": kind == "dead end", "true": true})
+                self.log.append((t, f"UPDATED #{old['idx']}: {text} (same place)"))
+            else:                                     # rewritten at exactly the stored position
+                same = [m for m in kept if dist(m["nav"], pos) < merge ** 2]
+                if same:
+                    m = min(same, key=lambda m: dist(m["nav"], pos))
+                    self.log.append((t, f"UPDATED #{m['idx']}: {text} (same place)"))
+        self.unexplained += len(new) + len(updated)   # must stay 0 (checked by the tests)
         self.markers = kept
         att = getattr(self.module, "last_attention", None)
         self.recall = []
@@ -134,6 +154,8 @@ def record_nav_replay(nav, cfg, layout: str, cave_seed: int, difficulty: float, 
     env = NavigatorEnv(replace(cfg, env=replace(cfg.env, layout=layout)))
     obs, info = env.reset(seed=episode_seed(cave_seed, difficulty),
                           options={"cave_seed": cave_seed, "difficulty": difficulty})
+    if hasattr(nav, "attach"):
+        nav.attach(env)
     nav.reset()
     trace = MemoryTrace(nav, env)
     viewer = Viewer(env.base.cave, scale=None, style="game", theme=theme, camera="follow")

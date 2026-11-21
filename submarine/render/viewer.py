@@ -1,4 +1,4 @@
-﻿"""pygame renderer for the 2D cave, the submarine and its sonar.
+"""pygame renderer for the 2D cave, the submarine and its sonar.
 
 Used by the keyboard driver (scripts/drive.py), env.render() and replay videos
 (evaluation/replay.py).

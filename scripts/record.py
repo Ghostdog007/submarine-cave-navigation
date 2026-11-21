@@ -1,4 +1,4 @@
-﻿"""Record replay videos of baselines and/or trained agents.
+"""Record replay videos of baselines and/or trained agents.
 
     python -m scripts.record --policies gap --models runs/archive/ppo_mlp_mixed_s0 --difficulties 0.5 1.0
     python -m scripts.record --models runs/archive/ppo_mlp_mixed_s0 --cave-seeds 1000003 --difficulties 0.75 --format gif

@@ -10,7 +10,11 @@ at 10 Hz until the next decision point:
 After turning back, no decision is due for `hold_after_turn_s` (so it actually turns round first).
 
 Action: Discrete(5). Slots 0-3 = forward/side exits sorted by bearing (right to left), slot 4 = turn back.
-Choosing an empty slot keeps the current heading and costs `invalid_penalty`.
+Empty slots (`empty_slot`):
+  * "remap" (default): an empty slot means the valid forward exit with the nearest slot index, or turn back if there
+    is none (a dead end). Every decision is a real exit or a turn-back: there is no "carry on regardless" option.
+  * "carry_on" (first phase-B runs): keep the current heading, cost `invalid_penalty`. Navigators learned to lean
+    on it (64% of the retention navigator's choices at maze junctions) and pressed into dead ends until timeout.
 
 Observation (61 values, see OBS): per slot [valid, cos/sin bearing (body), cos/sin heading (navigation frame),
 depth/10, width/pi, narrow], goal cue (cos/sin bearing, distance) as in CaveEnv, dead-reckoned pose (x, y / 25,
@@ -69,7 +73,8 @@ class NavigatorEnvConfig:
     decide_s: float = 2.0
     min_decide_s: float = 0.4                 # never two decisions closer than this
     hold_after_turn_s: float = 3.0
-    invalid_penalty: float = 0.1
+    invalid_penalty: float = 0.1              # only with empty_slot = "carry_on"
+    empty_slot: str = "remap"                 # "remap" | "carry_on" (see the module docstring)
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "NavigatorEnvConfig":
@@ -168,6 +173,16 @@ class NavigatorEnv(gym.Env):
             if steps >= min_steps and p.decision_due:
                 return total, False, False
 
+    @staticmethod
+    def resolve(k: int, valid) -> int:
+        """Slot actually taken for action k under empty_slot = "remap" (valid: 5 booleans, slot 4 always valid)."""
+        if k == N_SLOTS - 1 or valid[k]:
+            return k
+        front = [j for j in range(N_SLOTS - 1) if valid[j]]
+        if not front:
+            return N_SLOTS - 1                                # dead end: turn back
+        return min(front, key=lambda j: (abs(j - k), j))
+
     # ------------------------------------------------------------------ gym API
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -185,7 +200,10 @@ class NavigatorEnv(gym.Env):
         p, d, nav = self.pilot, self.pilot.driver, self.base._nav
         n_front = sum(x is not None for x in slots[:N_SLOTS - 1])
         penalty = 0.0
-        if k < N_SLOTS - 1 and slots[k] is None:              # empty slot: carry on, small penalty
+        requested = k
+        if self.cfg.empty_slot == "remap":
+            k = self.resolve(k, [x is not None for x in slots[:N_SLOTS - 1]] + [True])
+        if k < N_SLOTS - 1 and slots[k] is None:              # (carry_on mode) empty slot: carry on, small penalty
             target, back = d.heading, False
             penalty = self.cfg.invalid_penalty
         elif k == N_SLOTS - 1:
@@ -200,5 +218,6 @@ class NavigatorEnv(gym.Env):
         self._t_last = p.t
         self.n_decisions += 1
         reward, te, tr = self._drive_until_decision()
-        info = dict(self._info, n_decisions=self.n_decisions, invalid=penalty > 0, choice=k)
+        info = dict(self._info, n_decisions=self.n_decisions, invalid=requested != k or penalty > 0, choice=k,
+                    requested=requested)
         return self._obs(), float(reward - penalty), te, tr, info

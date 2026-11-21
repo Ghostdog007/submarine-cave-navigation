@@ -17,7 +17,10 @@ Fixes over the first (post-hoc) version, found from 0.4 s-sonar crashes:
     dropout can't open a fake hole in the wall that the vehicle "fits" through;
   * the margin grows with speed x scan age (walls seen 0.4 s ago, vehicle has moved since);
   * fallback picks the thrust closest to the request among safe ones; if none is safe with the requested turn,
-    gentler turns are tried (turning while moving sweeps the hull sideways); at standstill turning is free.
+    gentler turns are tried (turning while moving sweeps the hull sideways); at standstill turning is free;
+  * inside the floor (already closer than radius + floor to a seen wall) the vehicle may only creep: forward speed
+    is capped at `creep_speed`. There the check is only "no closer than now, as seen by sonar", and a wall corner
+    between two beams is invisible: phase B had one hull touch at 0.33 m/s at a crevasse bend this way.
 """
 
 from __future__ import annotations
@@ -45,6 +48,7 @@ class SafetyConfig:
     spacing: float = 0.1              # m between interpolated wall points
     thrusts: tuple[float, ...] = (1.0, 0.75, 0.5, 0.3, 0.15, 0.0, -0.25, -0.5, -1.0)   # candidate levels
     yaw_scales: tuple[float, ...] = (0.5, 0.0)    # gentler turns tried when no thrust level is safe
+    creep_speed: float | None = 0.2   # m/s, max forward speed inside the floor (None: no cap)
 
 
 class Odometry:
@@ -207,16 +211,32 @@ class SafetyFilter:
         now = float(self._tree.query([self.odom.x, self.odom.y])[0])
         need = self._need(u, scan_age, now)
         thrust, yaw = float(action[0]), float(action[1])
+        capped, t_max = False, 1.0
+        if self.cfg.creep_speed is not None and now < self.v.radius + self.cfg.floor:
+            t_max = self.creep_thrust(u)
+            if thrust > t_max:
+                thrust, capped = t_max, True
+                action = np.array([thrust, yaw], dtype=np.float32)
         if self.clearance(u, r, thrust, yaw, now, need) >= need:        # the common case: one cheap check
-            return action, False
+            return action, capped
         best, best_clr = None, -np.inf
         for cand in self.candidates(thrust, yaw):                         # nearest safe command
+            if cand[0] > t_max + 1e-9:
+                continue
             c = self.clearance(u, r, cand[0], cand[1], now, need)
             if c >= need:
                 return np.array(cand, dtype=np.float32), True
             if c > best_clr:
                 best, best_clr = cand, c
         return np.array(best, dtype=np.float32), True                    # none safe: most clearance
+
+    def creep_thrust(self, u: float) -> float:
+        """Largest thrust whose next-step forward speed stays within creep_speed (brakes harder if faster)."""
+        v = self.v
+        t = ((self.cfg.creep_speed - u) / v.dt + v.k_u * u) / v.a_max
+        if t < 0:
+            t = t / v.reverse_gain if v.reverse_gain > 0 else -1.0    # reverse thrust is weaker
+        return float(min(1.0, max(-1.0, t)))
 
     def candidates(self, thrust: float, yaw: float) -> list[tuple[float, float]]:
         """Fallback commands in order of preference: the requested turn with every thrust level (nearest first),

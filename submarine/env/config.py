@@ -1,4 +1,4 @@
-﻿"""Environment configuration, loadable from YAML (see configs/default.yaml)."""
+"""Environment configuration, loadable from YAML (see configs/default.yaml)."""
 
 from __future__ import annotations
 

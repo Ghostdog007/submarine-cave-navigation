@@ -206,3 +206,34 @@ def test_fast_filter_matches_batched_reference():
                 safe = np.flatnonzero(clr[1:] >= need)
                 want = np.array(cands[int(safe[0]) if safe.size else int(np.argmax(clr[1:]))])
             assert np.allclose(got, want, atol=1e-6) and over == (clr[0] < need)
+
+
+def test_creep_speed_inside_the_floor():
+    """Phase B crash: pushing on at 0.33 m/s while already inside the floor, where only "no closer as seen by
+    sonar" was checked. Inside the floor the filter must hold forward speed to creep_speed."""
+    from dataclasses import replace
+
+    def angled(cfg, y, psi=0.3):
+        """Filter 'y' m up a 2 m corridor (wall at y = 4), heading 17 deg away from that wall: going ahead
+        increases clearance, so only the creep cap can limit speed."""
+        f = SafetyFilter(cfg, V, SONAR.angles, 10.0)
+        f.odom.psi = psi
+        f.update_scan(scan(CORRIDOR, 5, y, psi))
+        return f
+
+    uncapped = angled(replace(SafetyConfig(), creep_speed=None), 4.45)
+    a, over = uncapped.filter((1.0, 0.0), u=0.33, r=0.0, scan_age=0.0)
+    assert not over and a[0] == 1.0                      # before the patch: full thrust allowed at 0.45 m
+
+    f = angled(SafetyConfig(), 4.45)                     # 0.45 m from the wall: inside radius + floor (0.52 m)
+    s, speeds = VehicleState(0.0, 0.0, 0.0, u=0.33), []
+    for _ in range(10):                                  # full thrust requested all along
+        a, over = f.filter((1.0, 0.0), u=s.u, r=0.0, scan_age=0.0)
+        assert over
+        s = step_vehicle(s, a, V)
+        speeds.append(s.u)
+    assert speeds[0] < 0.33                              # brakes at once (full braking: ~0.05 m/s per step)
+    assert max(speeds[3:]) <= f.cfg.creep_speed + 1e-6   # then holds creep speed
+    assert speeds[-1] > 0.15                             # and keeps creeping forward
+    a, over = angled(SafetyConfig(), 5.0).filter((1.0, 0.0), u=0.33, r=0.0, scan_age=0.0)
+    assert not over and a[0] == 1.0                      # outside the floor: no cap

@@ -1,4 +1,4 @@
-﻿"""Evaluate baselines on held-out caves and print the section 7 metrics.
+"""Evaluate baselines on held-out caves and print the section 7 metrics.
 
     python -m scripts.evaluate
     python -m scripts.evaluate --policies gap oracle --difficulties 0 1 --n-caves 100

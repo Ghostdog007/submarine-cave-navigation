@@ -1,4 +1,4 @@
-﻿"""Replay videos: run one or more policies on the same cave and write an MP4 (or GIF).
+"""Replay videos: run one or more policies on the same cave and write an MP4 (or GIF).
 
 Several policies are stepped in lockstep and stacked vertically, so you can
 watch e.g. the gap follower and a trained agent take the same cave side by

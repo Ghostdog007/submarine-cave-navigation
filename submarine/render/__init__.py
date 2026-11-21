@@ -1,1 +1,1 @@
-﻿"""Rendering: game-style viewer, art, replays."""
+"""Rendering: game-style viewer, art, replays."""

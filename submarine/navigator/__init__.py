@@ -1,4 +1,4 @@
-﻿"""Navigator (phase B): decision-level environment over the frozen driver, plus scripted reference navigators."""
+"""Navigator (phase B): decision-level environment over the frozen driver, plus scripted reference navigators."""
 
 import numpy as np
 
@@ -31,6 +31,50 @@ class GreedyNavigator:
         return int(front[int(np.argmax(score))])
 
 
+class OracleNavigator:
+    """Map-aware teacher (privileged: reads the true map, so only for demonstrations and as an upper bound).
+    For each offered exit it marches along the exit's direction from the true position (stopping at the first
+    point the vehicle can't occupy, so it never looks through rock) and scores the exit by the lowest
+    shortest-path distance to the goal seen on the way; the turn-back slot is scored the same way, straight
+    behind. It picks the best-scoring exit: dead-end branches score badly (the geodesic grows into them)."""
+
+    name = "nav-oracle"
+
+    def __init__(self, probe: float = 4.0, step: float = 0.25):
+        self.probe, self.step = probe, step
+        self.env = None
+
+    def attach(self, env):
+        self.env = env
+
+    def reset(self):
+        pass
+
+    def scores(self, obs: np.ndarray) -> np.ndarray:
+        e = self.env.base
+        sim, s = e.sim, e.sim.state
+        slots = obs[OBS["slots"]].reshape(N_SLOTS, SLOT_DIM)
+        out = np.full(N_SLOTS, np.inf)
+        for k in range(N_SLOTS):
+            if not (slots[k, 0] > 0.5 or k == N_SLOTS - 1):
+                continue
+            a = s.psi + float(np.arctan2(slots[k, 2], slots[k, 1]))
+            depth = float(slots[k, 5]) * 10.0
+            L = min(self.probe, depth) if depth > 0 else self.probe
+            best = np.inf
+            for d in np.arange(self.step, L + 1e-9, self.step):
+                g = sim.geodesic_at(s.x + d * np.cos(a), s.y + d * np.sin(a))
+                if not np.isfinite(g):
+                    break
+                best = min(best, g)
+            out[k] = best
+        return out
+
+    def act(self, obs: np.ndarray) -> int:
+        sc = self.scores(obs)
+        return int(np.argmin(sc)) if np.isfinite(sc).any() else N_SLOTS - 1
+
+
 class RandomNavigator:
     name = "nav-random"
 
@@ -46,4 +90,4 @@ class RandomNavigator:
 
 
 __all__ = ["N_SLOTS", "OBS", "OBS_DIM", "SLOT_DIM", "GreedyNavigator", "NavigatorEnv", "NavigatorEnvConfig",
-           "RandomNavigator", "slot_valid"]
+           "OracleNavigator", "RandomNavigator", "slot_valid"]

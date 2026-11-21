@@ -1,1 +1,1 @@
-﻿"""Submarine cave-navigation project."""
+"""Submarine cave-navigation project."""

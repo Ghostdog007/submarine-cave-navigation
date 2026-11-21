@@ -1,4 +1,4 @@
-﻿import numpy as np
+import numpy as np
 import pytest
 
 from submarine.world import test_seeds as held_out_seeds

@@ -1,4 +1,4 @@
-﻿"""Drive the submarine with the keyboard.
+"""Drive the submarine with the keyboard.
 
     python -m scripts.drive --seed 0 --difficulty 0.5
     python -m scripts.drive --difficulty 1 --current 0.3 --fov 120 --beams 24

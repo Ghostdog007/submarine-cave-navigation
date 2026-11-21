@@ -14,7 +14,10 @@ recently" (e.g. I just hit a dead end) down to "what happened this dive".
 JunctionMemory: RetentionMemory plus K position-keyed slots (episodic / spatial memory).
   write  when the previous decision was made at a junction: slot = (its dead-reckoned position, a learned memo
          of the observation, which includes the heading chosen there); when a dead end is detected: slot =
-         (current position, learned memo). Free slots first, then the oldest is overwritten.
+         (current position, learned memo). A write within `merge_radius` of a stored slot updates that slot (same
+         place: one memory, refreshed); otherwise free slots first, then the oldest is overwritten. (Without the
+         merge, a navigator stuck at a dead end rewrote it every decision and filled all slots with copies of it,
+         evicting every junction: phase B, maze cave 1000000.)
   read   attention over stored slots: logit = q . memo / sqrt(d) - alpha * |position - slot position|^2, so the
          slots of *this* place dominate ("at this junction I went left, and that was a dead end").
 Writes are gated by the observation flags, not learned; the memo content is learned end to end.
@@ -80,8 +83,9 @@ class JunctionMemory(RetentionMemory):
     x, y (current dead-reckoned position), prev_x, prev_y, prev_junction and dead_end (see navigator.OBS)."""
 
     def __init__(self, input_size: int, obs_index: dict, hidden_size: int = 512, n_slots: int = 8,
-                 memo_dim: int = 21, **kw):
+                 memo_dim: int = 21, merge_radius: float = 0.08, **kw):
         self.n_slots, self.memo_dim = n_slots, memo_dim
+        self.merge_radius = merge_radius                           # position units (metres / 25): 0.08 = 2 m
         super().__init__(input_size, hidden_size, **kw)
         self.slot_dim = memo_dim + 3                               # memo, x, y, used
         if self.state_size + n_slots * self.slot_dim > hidden_size:
@@ -121,10 +125,16 @@ class JunctionMemory(RetentionMemory):
                 w = (xt[:, I[flag]] > 0.5).float().view(N, 1)
                 if w.any():
                     used = slots[:, :, M + 2]
-                    # first free slot, else the oldest (largest age)
+                    wpos = th.cat([xt[:, I[kx]:I[kx] + 1], xt[:, I[ky]:I[ky] + 1]], dim=1)          # (N, 2)
+                    d2w = ((slots[:, :, M:M + 2] - wpos.unsqueeze(1)) ** 2).sum(-1)
+                    d2w = th.where(used > 0.5, d2w, th.full_like(d2w, 1e9))
+                    near_slot = d2w.min(dim=1)
+                    merge = (near_slot.values < self.merge_radius ** 2).view(N, 1)
+                    # same place: that slot; else the first free slot, else the oldest (largest age)
                     priority = th.where(used > 0.5, age, th.full_like(age, 1e9))
-                    target = th.nn.functional.one_hot(priority.argmax(dim=1), K).float() * w   # (N, K)
-                    new = th.cat([memo, xt[:, I[kx]:I[kx] + 1], xt[:, I[ky]:I[ky] + 1], th.ones(N, 1)], dim=1)
+                    idx = th.where(merge.view(N), near_slot.indices, priority.argmax(dim=1))
+                    target = th.nn.functional.one_hot(idx, K).float() * w   # (N, K)
+                    new = th.cat([memo, wpos, th.ones(N, 1)], dim=1)
                     slots = slots * (1 - target.unsqueeze(-1)) + target.unsqueeze(-1) * new.unsqueeze(1)
                     age = (age + w) * (1 - target) + target * 0.0     # written slot is newest (age 0)
             # ---- read
