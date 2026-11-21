@@ -1,0 +1,9 @@
+﻿[project]
+name = "submarine-cave-navigation"
+version = "0.1.0"
+description = "Two-level RL agent (learned driver with a built-in safety filter + memory navigator) for 2D submarine cave navigation"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

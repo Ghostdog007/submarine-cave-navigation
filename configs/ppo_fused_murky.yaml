@@ -1,0 +1,41 @@
+﻿# Step 1: camera + sonar (fused), murky water, realistic sonar ping rate.
+# Compare with ppo_sonar_murky.yaml and ppo_camera_murky.yaml (identical except `sensors`).
+name: ppo_fused_murky
+algo: ppo
+policy: MultiInputPolicy
+total_timesteps: 3000000
+n_envs: 8
+seed: 0
+device: cpu
+frame_stack: 1
+
+algo_kwargs:
+  n_steps: 1024
+  batch_size: 256
+  n_epochs: 10
+  learning_rate: lin_3e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.0
+
+policy_kwargs:
+  features_extractor_class: camera_state    # 1D CNN on the camera + MLP on the state vector
+  net_arch: [128, 128]
+
+checkpoint_freq: 500000
+
+eval:
+  difficulties: [0.0, 0.25, 0.5, 0.75, 1.0]
+  n_caves: 10
+  freq: 100000
+
+env:
+  cave_cache_size: 48        # per env; 8 envs share one process (--vec-env dummy), keep memory low
+  difficulty: [0.0, 1.0]
+  goal_cue: bearing
+  sensors: [sonar, camera]
+  sonar:
+    ping_interval: 0.4
+  turbidity:
+    enabled: true

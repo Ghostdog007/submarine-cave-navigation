@@ -1,0 +1,10 @@
+# Evaluation conditions for the camera / murky-water experiment (step 1).
+# Every policy is tested under these: mixed difficulty, murky patches, sonar pinging every 0.4 s.
+# Trained models keep their own sensors (sonar / camera / both); baselines use the sonar part.
+env:
+  difficulty: [0.0, 1.0]
+  sensors: [sonar, camera]
+  sonar:
+    ping_interval: 0.4        # realistic: a new 32-beam scan every 0.4 s, held in between
+  turbidity:
+    enabled: true             # 2-4 murky patches per cave, turbidity up to 1.0

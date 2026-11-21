@@ -1,0 +1,14 @@
+# Scenario: silt-out. One large, very dense murk cloud (turbidity ~1) across the route, light haze elsewhere.
+# Camera is blind inside it; sonar is unaffected. Same sensors as the step-1 camera experiment.
+env:
+  difficulty: [0.5, 0.5]
+  sensors: [sonar, camera]
+  max_steps: 1500
+  sonar:
+    ping_interval: 0.4
+  turbidity:
+    enabled: true
+    n_zones: [1, 1]
+    radius: [12.0, 16.0]
+    peak: [0.95, 1.0]
+    background: 0.1

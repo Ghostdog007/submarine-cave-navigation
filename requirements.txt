@@ -1,0 +1,22 @@
+# Core numerics and cave generation
+numpy
+scipy            # distance transform, connectivity / geodesic distance
+opensimplex      # smooth noise for wall roughness
+
+# RL environment and algorithms
+gymnasium
+stable-baselines3
+sb3-contrib      # RecurrentPPO (LSTM policy)
+torch==2.14.1+cu130   # CUDA build, pinned so pip doesn't pick the newer CPU-only 2.15 from PyPI
+
+--extra-index-url https://download.pytorch.org/whl/cu130
+
+# Logging, plotting, visualisation
+tensorboard
+matplotlib
+pygame           # live rendering of the 2D cave
+tqdm
+pyyaml           # experiment configs
+pytest
+imageio          # replay videos
+imageio-ffmpeg   # mp4 encoding

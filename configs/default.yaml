@@ -1,0 +1,44 @@
+# Default environment configuration. Any field can be omitted to keep its default
+# (see env/config.py and sim/config.py). Load with EnvConfig.from_yaml(path).
+
+env:
+  difficulty: [0.0, 0.0]      # [lo, hi]; each episode samples d uniformly, or give a single number
+  difficulty_step: 0.05       # sampled d is rounded to this grid
+  seed_split: train           # train | test (held-out seeds)
+  n_caves: 1000               # cave seed pool size
+  goal_cue: bearing           # bearing | none
+  max_steps: 600              # 60 s at dt = 0.1
+  goal_radius: 1.5            # m
+  cave_cache_size: 512
+
+  reward:
+    k_prog: 1.0               # per metre of geodesic progress
+    k_time: 0.01              # per step
+    k_smooth: 0.01            # times ||a - a_prev||^2
+    goal: 20.0
+    collision: 10.0           # subtracted on collision
+    k_prox: 0.0               # wall-proximity penalty (off)
+    prox_dist: 0.8            # m
+
+  vehicle:
+    dt: 0.1
+    radius: 0.4
+    a_max: 0.75
+    k_u: 0.5
+    u_max: 1.5
+    reverse_gain: 0.5
+    r_max: 1.0
+    tau_r: 0.3
+    max_current: 0.0          # m/s; per-episode current magnitude drawn from [0, max_current]
+
+  sonar:
+    n_beams: 32
+    fov_deg: 360.0
+    max_range: 10.0
+    step: 0.1
+    noise_std: 0.05
+    noise_frac: 0.02
+    dropout: 0.02
+    min_range: 0.0
+    beam_width_deg: 0.0
+    rays_per_beam: 3

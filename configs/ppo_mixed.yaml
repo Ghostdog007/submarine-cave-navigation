@@ -1,0 +1,37 @@
+# Phase 6, experiment 2 (first half): PPO + MLP trained on mixed difficulty, d ~ U[0, 1].
+# Same reward and network as ppo_d0.yaml so the only change is the training distribution
+# (plus a decaying learning rate and a larger validation set).
+name: ppo_mlp_mixed
+algo: ppo
+policy: MlpPolicy
+total_timesteps: 3000000
+n_envs: 8
+seed: 0
+device: cpu
+frame_stack: 1
+
+algo_kwargs:
+  n_steps: 1024
+  batch_size: 256
+  n_epochs: 10
+  learning_rate: lin_3e-4   # linear decay to 0
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.0
+
+policy_kwargs:
+  net_arch: [128, 128]
+
+checkpoint_freq: 500000
+
+eval:                       # 10 validation caves at each of 5 difficulties = 50 episodes
+  difficulties: [0.0, 0.25, 0.5, 0.75, 1.0]
+  n_caves: 10
+  freq: 100000
+
+env:
+  difficulty: [0.0, 1.0]
+  goal_cue: bearing
+  vehicle:
+    max_current: 0.0

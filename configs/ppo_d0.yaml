@@ -1,0 +1,35 @@
+# Phase 5: PPO with an MLP on easy caves (d = 0), goal cue on, no current.
+name: ppo_mlp_d0
+algo: ppo
+policy: MlpPolicy
+total_timesteps: 1000000
+n_envs: 8
+seed: 0
+device: cpu                 # small MLP: CPU is usually faster than GPU for PPO
+frame_stack: 1
+
+algo_kwargs:
+  n_steps: 1024             # per env -> 8192 steps per update
+  batch_size: 256
+  n_epochs: 10
+  learning_rate: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.0
+
+policy_kwargs:
+  net_arch: [128, 128]
+
+checkpoint_freq: 250000
+
+eval:                       # validation caves (never the held-out test caves)
+  difficulties: [0.0]
+  n_caves: 20
+  freq: 50000
+
+env:
+  difficulty: [0.0, 0.0]
+  goal_cue: bearing
+  vehicle:
+    max_current: 0.0

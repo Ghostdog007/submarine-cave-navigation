@@ -1,0 +1,53 @@
+# Learned driver (two-level architecture, phases A1-A3). Run: python -m scripts.train_driver --config configs/driver.yaml
+# The driver follows "exit + speed" commands from a scripted teacher navigator; the safety filter is inside.
+name: driver
+seed: 0
+n_envs: 48                  # 12 worker processes x 4 envs (averages out slow steps; ~2.5x throughput)
+envs_per_worker: 4
+net_arch: [128, 128]
+
+bc:                         # A1: imitation of the hand controller
+  steps: 200000
+  epochs: 10
+  batch: 1024
+  lr: 1.0e-3
+  log_std: -1.2             # exploration std after the warm start (exp(-1.2) = 0.3)
+bc_stages: [a2_tunnel, a2_layouts]
+bc_workers: 16
+
+ppo:                        # small learning rate + tight clipping protect the warm start
+  n_steps: 128               # x 48 envs = 6144 samples per update
+  batch_size: 1024
+  n_epochs: 5
+  learning_rate: 1.0e-4
+  gamma: 0.98               # the driver's task is short-horizon (follow the command now)
+  gae_lambda: 0.95
+  clip_range: 0.1
+  ent_coef: 0.0
+
+base:                       # DriverEnvConfig; `env` is an EnvConfig
+  teacher_mode: random      # 50% goal-ward exits at cruise speed, 50% random exits at random speeds
+  p_random: 0.5
+  speed_range: [0.4, 1.5]
+  expert_noise: 0.25        # A1 only: noise on the teacher's executed actions (labels stay clean)
+  env:
+    max_steps: 900
+    sonar: {ping_interval: 0.4}
+
+stages:
+  - name: a2_tunnel                       # A2.1: plain tunnels, fast sonar
+    steps: 1200000
+    env: {layout: [tunnel], difficulty: [0.0, 0.5], sonar: {ping_interval: 0.1}}
+  - name: a2_layouts                      # A2.2: every cave type, realistic 0.4 s sonar, water currents
+    steps: 1400000
+    env: {layout: [tunnel, maze, branches, crack, breakdown], difficulty: [0.0, 0.75],
+          vehicle: {max_current: 0.2}}
+  - name: a2_full                         # A2.3: full difficulty range
+    steps: 1400000
+    env: {layout: [tunnel, maze, branches, crack, breakdown], difficulty: [0.0, 1.0],
+          vehicle: {max_current: 0.2}}
+  - name: a3_robust                       # A3: sensor failures + blindness supervisor + hull damage
+    steps: 2000000
+    env: {layout: [tunnel, maze, branches, crack, breakdown], difficulty: [0.0, 1.0],
+          vehicle: {max_current: 0.2}, failures: {enabled: true}, supervisor: {enabled: true},
+          collision: {mode: damage}}

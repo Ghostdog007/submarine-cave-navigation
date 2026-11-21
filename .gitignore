@@ -1,0 +1,12 @@
+﻿/.venv/
+__pycache__/
+*.pyc
+runs/
+
+
+# replay videos are large (~130 MB); regenerate with scripts/record.py
+videos/**/*.mp4
+
+.pytest_cache/
+*.egg-info/
+

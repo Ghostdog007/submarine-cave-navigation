@@ -1,0 +1,10 @@
+# Evaluation conditions for the step-2 memory experiment: same sonar (every 0.4 s), time limit and energy
+# penalty as ret_layouts.yaml / ppo_layouts.yaml. Pick the cave type with --layout.
+env:
+  difficulty: [0.5, 0.5]
+  max_steps: 1500
+  sensors: [sonar]
+  sonar:
+    ping_interval: 0.4
+  reward:
+    k_energy: 1.0
