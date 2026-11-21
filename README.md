@@ -16,8 +16,9 @@ controllers and a map-aware oracle on held-out caves.
 > |---|---|
 > | A0: hand-written driver + built-in safety filter + openings detector | ✅ 0 crashes in 150 test dives (gap follower: 23–90%) |
 > | A1–A3: learned driver (imitation, then PPO curriculum with slow sonar, currents, sensor failures, hull damage) | ✅ 0 crashes in 150 test dives; as good as the hand driver |
-> | B: navigators (no memory / retention / retention + junction memory) | ✅ trained: 1 crash in 750 test dives; no memory 82% success (greedy heuristic 83%); **memory navigators worse (69–72%)** |
-> | B fixes: masked exits, deduplicated memory writes, warm start, filter floor patch | next (diagnosis in [progress.md](progress.md#stage-9-two-level-architecture-learned-driver-with-a-built-in-safety-filter-memory-navigator)) |
+> | B round 1: navigators (no memory / retention / retention + junction memory) | ✅ 1 crash in 750 test dives; memory navigators worse (69–72% vs 82%): a free "carry on" action, duplicate memory writes |
+> | B round 2: real exit choices, merged writes, teacher warm start, filter creep cap | ✅ **retention memory best: 88.7% success** (no memory 83.3%, greedy 82.0%, oracle 96.0%; p = 0.006 vs greedy); maze dead-end re-entries 2.5× fewer; **0 crashes in 600 dives**; junction memory still no gain (80.7%) |
+> | M: exit memory + auxiliary losses + memory scenarios (branch `memory-v3`) | next ([progress.md](progress.md#phase-b-round-2-the-fixes-retrained-runsnav__v2)) |
 
 ![game-style renderer](docs/figures/game_renderer_drive.png)
 

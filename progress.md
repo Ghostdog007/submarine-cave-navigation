@@ -485,10 +485,62 @@ memory 1.60 / 0.60.
 The memory replays are verified against the agent's state: every displayed memory matches a write event (26 writes,
 0 unexplained in maze cave 1000000).
 
-**Proposed fixes (not yet run):** mask empty slots so every decision is a real exit or turn-back; write a dead end
-or junction only if no slot already holds one within ~2 m (update it instead); warm-start the navigators by imitation
-of a map-aware teacher before PPO; inside the filter floor allow only clearance-increasing motion, capped at
-0.2 m/s; then retrain and re-evaluate the three navigators.
+### Phase B round 2: the fixes, retrained (`runs/nav_*_v2`)
+
+**Fixes** (commit `913e292`, all with tests):
+1. An empty exit slot now means the nearest real exit, or turn back at a dead end (`empty_slot: remap`). There is
+   no "carry on regardless".
+2. A junction-memory write within 2 m of a stored slot updates that slot.
+3. Every navigator is warm-started by imitating a map-aware teacher (`OracleNavigator`: marches along each exit
+   on the true shortest-path field). The demonstrations were 40k decisions on training caves, with 18% random
+   wrong turns executed; they also trained the value head. Held-out agreement with the teacher: 93% (none) and
+   92% (both memory navigators).
+4. Safety filter: inside the 0.52 m floor, forward speed is capped at 0.2 m/s.
+
+**Driver gate with the patched filter** (150 dives each): 0 collisions, 0 contacts. Learned driver: crevasse
+87 → 90%, boulder choke 50 → 57%, others unchanged; slightly slower in crevasses (0.89 → 0.83 m/s).
+
+**Test results** (30 held-out caves per type, d = 0.5; greedy re-run with the patched filter):
+
+| Success | Tunnel | Maze | Branches | Crevasse | Boulder choke | All 150 |
+|---|---|---|---|---|---|---|
+| Oracle (true map; the teacher) | 100% | 100% | 100% | 100% | 80% | 96.0% |
+| Greedy heuristic | 100% | 70% | 97% | 90% | 53% | 82.0% |
+| No memory, round 2 | 100% | 77% | 97% | 90% | 53% | 83.3% |
+| **Retention, round 2** | 100% | **83%** | 97% | **93%** | **70%** | **88.7%** |
+| Retention + junction memory, round 2 | 100% | 67% | 93% | 93% | 50% | 80.7% |
+| *Round 1: none / retention / junction* | | *57 / 20 / 27%* | | | | *82 / 69 / 72%* |
+
+Maze, per dive:
+
+| | Dead-end entries | Re-entries | Backtracking |
+|---|---|---|---|
+| Greedy | 1.27 | 0.40 | 20.8 m |
+| No memory | 1.23 | 0.33 | 19.7 m |
+| **Retention** | **1.07** | **0.13** | **17.5 m** |
+| Junction memory | 1.23 | 0.33 | 21.3 m |
+
+Paired by cave (sign test over the 150 caves):
+
+| Comparison | Caves only the first solved | Caves only the second solved | p |
+|---|---|---|---|
+| Retention vs greedy | 11 | 1 | **0.006** |
+| Retention vs junction memory | 14 | 2 | **0.004** |
+| Retention vs no memory | 11 | 3 | 0.057 |
+| Junction memory vs no memory | 5 | 9 | 0.42 |
+
+- **Memory now helps.** Retention is the best navigator: 88.7%, against 83.3% without memory and 82.0% for
+  greedy. It re-enters maze dead ends 2.5× less often than the memoryless navigator. In round 1 it was the worst
+  (69%).
+- **Junction memory still adds nothing** over no memory (80.7% vs 83.3%, not significant), and it does worse
+  than plain retention, which it contains. Its position-keyed slots and attention read give the policy one more
+  vector to decode, and nothing trains what goes into them. That is the motivation for the `memory-v3` branch:
+  per-exit reads, auxiliary losses, and scenarios that need memory.
+- **0 hull breaches in 600 navigator test dives** after the creep cap (round 1: 1 in 750).
+- **The remaining gap to the teacher** (96%) is in mazes and boulder chokes.
+
+Comparison replays: every navigator on the same hardest cave per type, plus maze cave 1000000, in
+`videos/08_round2/` (see its README).
 
 ## Training infrastructure and speed
 
@@ -554,8 +606,9 @@ identical except batch size and device; the GPU arm was stopped at 500k steps):
 
 ## Next
 
-1. Stage 9 fixes (see phase B): masked exits, deduplicated memory writes, warm-started navigators, filter floor
-   patch; retrain and re-evaluate the three navigators.
+1. Memory v3 (branch `memory-v3`, see `docs/memory_v3.md` there): exit memory with per-exit reads, auxiliary
+   losses (loop closure, taken, known dead end), memory scenarios (`decoy`, `loops`, blind dives), and four
+   variants (none / GRU / graph / exit).
 2. Planned extension: place memory + speed modes (faster through sections already passed safely), return-to-base
    scenario.
 3. LSTM comparison against retention; curate `videos/` once the memory navigators are confirmed in complex caves.
