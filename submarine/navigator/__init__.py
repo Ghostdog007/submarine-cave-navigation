@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from .nav_env import N_SLOTS, OBS, OBS_DIM, SLOT_DIM, NavigatorEnv, NavigatorEnvConfig
+from .nav_env import AUX, AUX_DIM, N_SLOTS, OBS, OBS_DIM, POS_SCALE, SLOT_DIM, NavigatorEnv, NavigatorEnvConfig
 
 
 def slot_valid(obs: np.ndarray) -> np.ndarray:
@@ -89,5 +89,5 @@ class RandomNavigator:
         return int(self.rng.choice(valid)) if valid.size else N_SLOTS - 1
 
 
-__all__ = ["N_SLOTS", "OBS", "OBS_DIM", "SLOT_DIM", "GreedyNavigator", "NavigatorEnv", "NavigatorEnvConfig",
+__all__ = ["AUX", "AUX_DIM", "POS_SCALE", "N_SLOTS", "OBS", "OBS_DIM", "SLOT_DIM", "GreedyNavigator", "NavigatorEnv", "NavigatorEnvConfig",
            "OracleNavigator", "RandomNavigator", "slot_valid"]

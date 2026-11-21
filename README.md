@@ -8,16 +8,17 @@ that degrades in **murky water**. Agents are trained with PPO (Stable-Baselines3
 controllers and a map-aware oracle on held-out caves.
 
 > **Status (Nov 2026): two-level architecture: built, trained and evaluated; memory fixes next.** The end-to-end agents (one network
-> driving at 10 Hz *and* remembering junctions) reached their limits: memory cut dead-end re-entries ~11Ã—, but
+> driving at 10 Hz *and* remembering junctions) reached their limits: memory cut dead-end re-entries ~11×, but
 > crashes prevented any gain in success, and a safety filter bolted on after training made the agents stall.
 > Their code is removed, their runs are in `runs/archive/` and their results in [progress.md](progress.md).
 >
 > | Phase | State |
 > |---|---|
-> | A0: hand-written driver + built-in safety filter + openings detector | âœ… 0 crashes in 150 test dives (gap follower: 23â€“90%) |
-> | A1â€“A3: learned driver (imitation, then PPO curriculum with slow sonar, currents, sensor failures, hull damage) | âœ… 0 crashes in 150 test dives; as good as the hand driver |
-> | B: navigators (no memory / retention / retention + junction memory) | âœ… trained: 1 crash in 750 test dives; no memory 82% success (greedy heuristic 83%); **memory navigators worse (69â€“72%)** |
-> | B fixes: masked exits, deduplicated memory writes, warm start, filter floor patch | next (diagnosis in [progress.md](progress.md#stage-9-two-level-architecture-learned-driver-with-a-built-in-safety-filter-memory-navigator)) |
+> | A0: hand-written driver + built-in safety filter + openings detector | ✅ 0 crashes in 150 test dives (gap follower: 23–90%) |
+> | A1–A3: learned driver (imitation, then PPO curriculum with slow sonar, currents, sensor failures, hull damage) | ✅ 0 crashes in 150 test dives; as good as the hand driver |
+> | B: navigators (no memory / retention / retention + junction memory) | ✅ trained: 1 crash in 750 test dives; no memory 82% success (greedy heuristic 83%); **memory navigators worse (69–72%)** |
+> | B fixes: masked exits, deduplicated memory writes, warm start, filter floor patch | ✅ built; round 2 training on `main` (diagnosis in [progress.md](progress.md#stage-9-two-level-architecture-learned-driver-with-a-built-in-safety-filter-memory-navigator)) |
+> | **M (this branch, `memory-v3`): exit memory, trained by auxiliary losses on scenarios that need memory** | **built; model forward pass checked; tests written (`tests/test_memnav.py`) but not yet run; not trained** (see [Memory v3](#memory-v3-exit-memory-this-branch) and [docs/memory_v3.md](docs/memory_v3.md)) |
 
 ![game-style renderer](docs/figures/game_renderer_drive.png)
 
@@ -81,15 +82,16 @@ design is meant to fix that.
   filter never surprises it.
 - **Memory handles what it's good at: choosing exits.** A junction-memory slot means exactly "at junction #2
   I took opening B; it was a dead end".
-- **Cheaper training:** the navigator makes ~30â€“75 decisions per episode instead of ~1,500 network calls, and
+- **Cheaper training:** the navigator makes ~30–75 decisions per episode instead of ~1,500 network calls, and
   the 10 Hz control runs as plain code inside the parallel workers. That should cut wall-clock time per run
-  ~5â€“10Ã— (to be measured).
+  ~5–10× (to be measured).
 
 | Package | Role |
 |---|---|
-| `submarine/control/` | driver: controller + integrated safety filter (to build) |
-| `submarine/navigator/` | openings detector + decision-level environment (to build) |
-| `submarine/memory/` | retention + junction memory for the navigator (to build) |
+| `submarine/control/` | driver: openings detector, hand controller, integrated safety filter, learned driver |
+| `submarine/navigator/` | decision-level environment (+ AUX ground-truth labels, goal-cue withholding), greedy / random / oracle navigators |
+| `submarine/memory/` | round 1-2: retention + junction memory (SB3 RecurrentPPO); **memory-v3: `exitmem.py` (exit memory, 4 variants), `trainer.py` (recurrent PPO + aux losses + warm start)** |
+| `submarine/world/layouts.py` | cave types, **+ `decoy` and `loops` (memory-v3)** |
 
 ## Scenarios the new agent should handle
 
@@ -105,17 +107,86 @@ design is meant to fix that.
 | Gentle wall contact | hull scrape | tolerate light contact (hull damage), avoid hard impacts | hull-damage model + filter |
 | Energy budget | battery limit | avoid wasteful speed and dithering | energy penalty in the reward |
 | Return through known passage (planned) | exit dive along the way in | go faster where it already passed safely | place memory + speed mode, filter as the hard limit |
+| **Decoy dead ends** (`decoy`, memory-v3) | side passages that head straight for the exit and end blind | enter a decoy at most once, even though the goal bearing keeps recommending it | exit memory ("known dead end down this exit") |
+| **Loops** (`loops`, memory-v3) | cave systems with interconnected passages | don't circle: notice "I've been here" and take an exit not yet tried | exit memory (loop closure, "taken before") |
+| **No goal cue** (memory-v3, 30% of training dives) | exploring for an unknown exit | systematic exploration without re-exploring | exit memory |
+
+## Memory v3: exit memory (this branch)
+
+Round 1 showed the navigators **recalled the right memory and ignored it**. The causes were a free "carry on"
+action, no training signal for what the memory should hold, and duplicate writes. Memory v3 redesigns the
+navigator's memory around one question per exit: *what do I know about this exit?* Every piece comes from
+published navigation-memory work. The [design document](docs/memory_v3.md) gives the reasoning and sources.
+
+```
+ observation (61) --> encoder --> GRU ------------------------------------ context c
+                                    |                                         |
+ STORE (32 entries, sparse writes)  |   write: DEPARTURE when leaving a junction (pos, heading taken, memo)
+   position | heading | memo(16)    |          DEAD END when one is detected   (pos, memo)
+   dead-end | used | age            |          same place again -> UPDATE that entry (no flooding)
+                                    v
+ for each exit k (direction e_k):  LOCAL read  "did I leave from HERE along e_k?"    (attention + rule)
+                                   AHEAD read  "is there a dead end DOWN e_k (0-14 m)?" (attention + rule)
+                                    |
+                    memory gate g (starts ~0.12, opens as memory pays off)
+                                    v
+ exit scorer: [exit features, g * memory_k, c] -> score_k  ->  softmax over VALID exits (+ turn back)
+ aux heads (ungated memory): loop closure, per-exit "taken before", per-exit "known dead end"
+```
+
+| Piece | What it fixes | From |
+|---|---|---|
+| Per-exit reads, pointer-style policy | "recalled but not used": memory's answer sits on the exit it concerns | Scene Memory Transformer, SPTM |
+| Auxiliary losses from simulator ground truth | no signal for what to store; memory trained densely, every decision | Nav A3C (loop closure), UNREAL, MERLIN |
+| Sparse, merged writes keyed by position | duplicates evicting useful memories | Neural Map |
+| Memory gate initialised nearly closed | noisy early memory teaching the policy to ignore it | GTrXL |
+| Scenarios where the present misleads (`decoy`, `loops`, no goal cue) | memory not needed to score well | Memory Maze (isolate memory) |
+| Warm start over whole episodes (state carried) | random-start policies collapsing to a default | our driver and round-2 results |
+| Stored-state recurrent PPO (custom, 4 variants) | SB3 has no aux-loss hook | R2D2 / recurrent PPO practice |
+
+Four navigators are trained identically: `none` (MLP), `gru` (POPGym's strong baseline), `graph`
+(rule-based reads over the same store, an explicit junction graph), and `exit` (learned reads). They differ
+**only** in their memory. The test reports success per cave type plus two memory-specific rates:
+- **avoid:** a known dead-end exit is offered; is it avoided?
+- **untried:** at a revisited junction, is an untried exit taken?
+
+There is also a memory-wipe ablation.
+
+**Training speed (meant to be exact; equivalence tests written, to run first):** the navigator turns off the base env's per-step opening count, which only
+the old end-to-end agents use. The hand controller's scan-only terms are cached per sonar ping, and hot scalar
+`np.clip` calls are replaced. Together that is about 25–30% less CPU per decision. Workers stay PyTorch-free,
+and the learner's memory is a few MB: rollouts are 32 × 64 × 72 floats, and the recurrent state is at most
+800 floats per env.
+
+### Running it (tomorrow's plan)
+
+```powershell
+# 0. tests (new: tests/test_memnav.py), then a 2-minute smoke run
+python -m pytest tests/test_memnav.py -q
+python -m scripts.collect_nav_demos --config configs/memnav.yaml --decisions 3000 --workers 4 --out runs/memnav_demos_smoke.npz
+python -m scripts.train_memnav --variant exit --scale 0.01 --workers 2 --name memnav_smoke --demos runs/memnav_demos_smoke.npz
+
+# 1. teacher demonstrations (~10 min), 2. four variants in parallel (~2-2.5 h), watch live
+python -m scripts.collect_nav_demos --config configs/memnav.yaml
+foreach ($v in "none","gru","graph","exit") { Start-Process .venv\Scripts\python.exe "-m scripts.train_memnav --variant $v" }
+python -m scripts.watch_training runs/memnav_none runs/memnav_gru runs/memnav_graph runs/memnav_exit
+
+# 3. evaluation: all cave types, memory scenarios, blind dives, memory-wipe ablation
+python -m scripts.eval_navigator --config configs/memnav.yaml --policies greedy oracle --models runs/memnav_none runs/memnav_gru runs/memnav_graph runs/memnav_exit
+python -m scripts.eval_navigator --config configs/memnav.yaml --layouts maze decoy loops --goal-cue-prob 0 --wipe-memory --models runs/memnav_gru runs/memnav_graph runs/memnav_exit
+python -m scripts.nav_videos --config configs/memnav.yaml --models runs/memnav_exit --layout decoy --caves 1000000
+```
 
 ## Features
 
-- **Procedural caves** from an integer seed, with a difficulty knob d âˆˆ [0, 1]: width, cracks down to 1.7 m,
+- **Procedural caves** from an integer seed, with a difficulty knob d ∈ [0, 1]: width, cracks down to 1.7 m,
   rough walls, pillars, winding paths. Every cave is checked to be solvable. Train / validation / test seeds are disjoint.
 - **Cave layouts modelled on real exploration hazards:** single tunnel, maze with dead ends, misleading side
   branches, glacier crevasse with squeezes, boulder choke; plus a silt-out scenario.
 - **Energy model:** power from thrust, turning and on-board load; an evaluation metric and an optional reward penalty.
 - **Vehicle:** thrust with drag, a lagged turn-rate command, optional water current; 10 Hz control.
 - **Sensors:**
-  - 32-beam 360Â° sonar: noise, dropout, configurable ping rate, field of view and beam width.
+  - 32-beam 360° sonar: noise, dropout, configurable ping rate, field of view and beam width.
   - Forward camera: 64-pixel scanline with an underwater image model (attenuation, backscatter, speckle).
   - Murky-water patches that blind the camera but not the sonar.
 - **Gymnasium environment** with reward shaping based on shortest-path distance through the cave
@@ -221,12 +292,12 @@ runs/          training runs and evaluations (git-ignored); runs/archive/ holds 
 
 | | |
 |---|---|
-| World | 50 m Ã— 30 m, 0.2 m grid, top-down 2D |
-| Action | `[thrust, yaw command]` âˆˆ [âˆ’1, 1]Â², 10 Hz |
+| World | 50 m × 30 m, 0.2 m grid, top-down 2D |
+| Action | `[thrust, yaw command]` ∈ [−1, 1]², 10 Hz |
 | Vehicle | max 1.5 m/s (reverse 0.75), turn rate up to 1 rad/s with 0.3 s lag, disc radius 0.4 m |
 | Observation (sonar) | 32 ranges + speed + yaw rate + goal bearing/distance + previous action (39 values) |
-| Observation (camera) | `{"camera": 1Ã—64 image, "state": vector}` |
-| Reward | +1 per metre of shortest-path progress, âˆ’0.01 per step, âˆ’0.01â€–Î”aâ€–Â², +20 goal, âˆ’10 collision |
+| Observation (camera) | `{"camera": 1×64 image, "state": vector}` |
+| Reward | +1 per metre of shortest-path progress, −0.01 per step, −0.01‖Δa‖², +20 goal, −10 collision |
 | Episode end | goal within 1.5 m, collision, or 60 s |
 
 Full details in [context.md](context.md) and [progress.md](progress.md).
@@ -239,6 +310,6 @@ Full details in [context.md](context.md) and [progress.md](progress.md).
   in one process.
 - **Several trainings at once:** use `--threads 4` (PyTorch threads per learner) so they don't oversubscribe the CPU.
 - **GPU:** not worth it for these small networks. Updates get faster, but acting one step at a time is slower on
-  the GPU, so end-to-end training was 2.7Ã— slower (see the A/B check in progress.md). Train on CPU.
+  the GPU, so end-to-end training was 2.7× slower (see the A/B check in progress.md). Train on CPU.
 - **Reproducibility:** caves, sensor noise and currents are seeded. Evaluation uses fixed per-episode seeds, so all
   policies face identical conditions and replays reproduce evaluation numbers exactly.

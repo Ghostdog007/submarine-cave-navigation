@@ -122,6 +122,63 @@ class MemoryTrace:
         self._last_decision_true = (st.x, st.y)
 
 
+class ExitMemoryTrace:
+    """The same display for exit-memory navigators (memory-v3): store entries decoded from the navigator's state,
+    write events logged as STORED / UPDATED (merged at the same place) / REPLACED (oldest evicted), and checked
+    against the observation's write flags (an entry change without a flag counts as unexplained: must stay 0)."""
+
+    def __init__(self, nav, env):
+        self.nav, self.env = nav, env
+        m = getattr(nav, "model", None)
+        self.model = m if getattr(getattr(m, "cfg", None), "has_store", False) else None
+        self.log: list[tuple[float, str]] = []
+        self.markers: list[dict] = []
+        self.recall: list[dict] = []
+        self.n_written = 0
+        self.unexplained = 0
+        self._ids: dict[int, int] = {}                 # store slot -> display number
+
+    @property
+    def active(self):
+        return self.model is not None
+
+    def to_world(self, nx, ny):
+        x0, y0, p0 = self.env.base._nav_origin
+        return (x0 + nx * np.cos(p0) - ny * np.sin(p0), y0 + nx * np.sin(p0) + ny * np.cos(p0))
+
+    def after_decision(self, obs_in, t: float):
+        if not self.active:
+            return
+        from submarine.navigator import OBS
+
+        old = {m["slot"]: m for m in self.markers}
+        flags = int(obs_in[OBS["prev_junction"]] > 0.5) + int(obs_in[OBS["dead_end"]] > 0.5)
+        changed = 0
+        markers = []
+        for e in self.model.entries(self.nav.state):
+            k, prev = e["slot"], old.get(e["slot"])
+            same = prev is not None and np.hypot(e["pos"][0] - prev["nav"][0], e["pos"][1] - prev["nav"][1]) < 1e-4 \
+                and prev["dead_end"] == e["dead_end"]
+            if not same:
+                changed += 1
+                what = "dead end" if e["dead_end"] else f"left junction, heading {np.degrees(e['heading']):+.0f} deg"
+                if prev is not None and prev["dead_end"] == e["dead_end"] and \
+                        np.hypot(e["pos"][0] - prev["nav"][0], e["pos"][1] - prev["nav"][1]) < \
+                        self.model.cfg.merge_radius:
+                    self.log.append((t, f"UPDATED #{self._ids[k]}: {what} (same place)"))
+                else:
+                    self.n_written += 1
+                    verb = "REPLACED oldest with" if prev is not None else "STORED"
+                    self._ids[k] = self.n_written
+                    self.log.append((t, f"{verb} #{self.n_written}: {what}"))
+            markers.append({"slot": k, "nav": e["pos"], "xy": self.to_world(*e["pos"]), "dead_end": e["dead_end"],
+                            "idx": self._ids.get(k, 0)})
+        self.unexplained += max(0, changed - flags)
+        self.markers = markers
+        s = self.model.exit_strengths()
+        self.exit_memory = None if s is None else s[0].numpy()
+
+
 def _probs(nav, obs):
     """The navigator's action distribution at this decision (without advancing its state)."""
     import torch as th
@@ -131,6 +188,9 @@ def _probs(nav, obs):
         return None
     with th.no_grad():
         ot = th.as_tensor(obs[None], dtype=th.float32)
+        if hasattr(m, "step"):                             # exit-memory navigator (memory-v3)
+            logits, _, _, _ = m.step(ot, nav.state.clone(), nav.start)
+            return th.softmax(logits[0], -1).numpy()
         if nav.recurrent:
             st = nav.state
             if st is None:
@@ -157,7 +217,7 @@ def record_nav_replay(nav, cfg, layout: str, cave_seed: int, difficulty: float, 
     if hasattr(nav, "attach"):
         nav.attach(env)
     nav.reset()
-    trace = MemoryTrace(nav, env)
+    trace = ExitMemoryTrace(nav, env) if hasattr(getattr(nav, "model", None), "entries") else MemoryTrace(nav, env)
     viewer = Viewer(env.base.cave, scale=None, style="game", theme=theme, camera="follow")
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -195,6 +255,9 @@ def record_nav_replay(nav, cfg, layout: str, cave_seed: int, difficulty: float, 
                 col = (255, 220, 80) if chosen else (180, 200, 220)
                 pygame.draw.line(cv, col, o, p, 4 if chosen else 2)
                 lab = SLOT_NAMES[k] + (f" {100 * state['probs'][k]:.0f}%" if state["probs"] is not None else "")
+                em = getattr(trace, "exit_memory", None)          # memory-v3: what memory says about this exit
+                if em is not None:
+                    lab += (" [known dead end]" if em[k, 1] > 0.5 else "") + (" [taken]" if em[k, 0] > 0.5 else "")
                 cv.blit(font.render(lab, True, col), (p[0] + 4, p[1] - 8))
         # drift: remembered (dead-reckoned) vs true position at write time
         if trace.active:

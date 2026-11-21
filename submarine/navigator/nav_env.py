@@ -22,6 +22,10 @@ cos/sin heading), the previous decision (its pose, chosen heading, whether it wa
 junction / dead-end flags, speed, time since the last decision, episode time, sonar health, supervisor tier, hull.
 The memory modules (submarine/memory) read the pose and the flags at the fixed indices in OBS.
 
+memory-v3 additions: `goal_cue_prob` withholds the goal cue in a fraction of dives ("find the exit"), and
+`aux_labels` appends ground-truth labels (AUX) for the memory's auxiliary losses; CaveEnv's own per-step junction
+counting is switched off here (unused by the navigator, ~11% of a decision).
+
 Reward: the CaveEnv reward summed over the driver steps (shortest-path progress, time, energy, damage, goal,
 collision/abort), plus the invalid-slot penalty.
 """
@@ -63,6 +67,15 @@ def _layout():
 
 OBS, OBS_DIM = _layout()
 
+# Ground-truth labels for the memory's auxiliary losses (memory-v3), appended AFTER the 61 navigator inputs when
+# `aux_labels` is on. They ride in the observation so they survive vector-env auto-resets; models must read only
+# obs[:OBS_DIM] (tested). All from the TRUE trajectory, at the moment of this observation:
+#   loop       1  back within `aux_radius` of an earlier decision point, after >= `aux_loop_path` m of travel
+#   taken      5  per exit slot: left an earlier junction from (here, this exit's direction)
+#   dead_known 5  per exit slot: ... and that departure ran into a dead end before coming back
+AUX = {"loop": 0, "taken": slice(1, 6), "dead_known": slice(6, 11)}
+AUX_DIM = 11
+
 
 @dataclass(frozen=True)
 class NavigatorEnvConfig:
@@ -75,6 +88,11 @@ class NavigatorEnvConfig:
     hold_after_turn_s: float = 3.0
     invalid_penalty: float = 0.1              # only with empty_slot = "carry_on"
     empty_slot: str = "remap"                 # "remap" | "carry_on" (see the module docstring)
+    goal_cue_prob: float = 1.0                # P(an episode shows the goal cue); otherwise "find the exit" blind
+    aux_labels: bool = False                  # append the AUX ground-truth labels to the observation
+    aux_radius: float = 2.0                   # m, "same place"
+    aux_loop_path: float = 6.0                # m travelled before a return counts as a loop closure
+    aux_heading_cos: float = 0.77             # same exit direction: within ~40 deg
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "NavigatorEnvConfig":
@@ -93,8 +111,10 @@ class NavigatorEnv(gym.Env):
 
     def __init__(self, config: NavigatorEnvConfig | dict | None = None):
         cfg = config if isinstance(config, NavigatorEnvConfig) else NavigatorEnvConfig.from_dict(config)
-        if not cfg.env.navigation.enabled:
-            cfg = replace(cfg, env=replace(cfg.env, navigation=replace(cfg.env.navigation, enabled=True)))
+        # dead reckoning on; CaveEnv's own per-step junction counting off (the navigator has its own detector,
+        # nothing reads those flags here, and they cost ~11% of a decision)
+        cfg = replace(cfg, env=replace(cfg.env, navigation=replace(cfg.env.navigation, enabled=True,
+                                                                   junction_flags=False)))
         self.cfg = cfg
         self.base = CaveEnv(cfg.env)
         dcfg = replace(cfg.driver, cruise_speed=cfg.cruise_speed)
@@ -105,7 +125,8 @@ class NavigatorEnv(gym.Env):
             self.pilot = LearnedDriverPolicy(cfg.driver_actor, dcfg, **kw)
         else:
             self.pilot = DriverPolicy(dcfg, **kw)
-        self.observation_space = gym.spaces.Box(-2.0, 2.0, (OBS_DIM,), np.float32)
+        self.observation_space = gym.spaces.Box(-2.0, 2.0, (OBS_DIM + (AUX_DIM if cfg.aux_labels else 0),),
+                                                np.float32)
         self.action_space = gym.spaces.Discrete(N_SLOTS)
         self.dt = cfg.env.vehicle.dt
 
@@ -139,7 +160,7 @@ class NavigatorEnv(gym.Env):
         obs = self._base_obs
         L = self.pilot.L
         goal = L.goal(obs)
-        if goal is not None:
+        if goal is not None and self._cue:
             o[O["goal"]] = [np.cos(goal[0]), np.sin(goal[0]), goal[1]]
         o[O["x"]], o[O["y"]] = nav.x / POS_SCALE, nav.y / POS_SCALE
         o[O["cos_psi"]], o[O["sin_psi"]] = np.cos(nav.psi), np.sin(nav.psi)
@@ -154,7 +175,47 @@ class NavigatorEnv(gym.Env):
         o[O["time"]] = e._t / e.cfg.max_steps
         _, hull, sonar_ok, tier = driver_extras(e)
         o[O["sonar_ok"]], o[O["tier"]], o[O["hull"]] = sonar_ok, tier, hull
-        return np.clip(o, -2.0, 2.0)
+        o = np.clip(o, -2.0, 2.0)
+        bearings = [None if x is None and k < N_SLOTS - 1 else (np.pi if x is None else x.opening.bearing)
+                    for k, x in enumerate(slots)]
+        labels = self._aux_labels(bearings, n_front)
+        return np.concatenate([o, labels]) if self.cfg.aux_labels else o
+
+    # ------------------------------------------------------------------ ground truth for the memory's aux losses
+    def _aux_labels(self, bearings, n_front: int) -> np.ndarray:
+        """Labels for THIS observation from the true trajectory (see AUX), and the bookkeeping behind them:
+        decision points (for loop closure) and junction departures (exit taken; dead end found before return)."""
+        c, s = self.cfg, self.base.sim.state
+        pl = float(self._info.get("path_length", 0.0))
+        R2 = c.aux_radius ** 2
+        near = lambda q: (q["x"] - s.x) ** 2 + (q["y"] - s.y) ** 2 < R2
+        out = np.zeros(AUX_DIM, np.float32)
+        out[AUX["loop"]] = float(any(near(q) and pl - q["pl"] >= c.aux_loop_path for q in self._points))
+        for dep in self._departures:                          # returned to where a departure left from: closed
+            if dep["open"] and near(dep) and pl - dep["pl"] >= c.aux_loop_path:
+                dep["open"] = False
+        if n_front == 0:                                      # dead end: the latest open departure led here
+            open_ = [dep for dep in self._departures if dep["open"]]
+            if open_:
+                open_[-1]["dead"] = True
+        heads = [None if b is None else s.psi + b for b in bearings]
+        for k, h in enumerate(heads):
+            if h is None:
+                continue
+            for dep in self._departures:
+                if near(dep) and np.cos(dep["h"] - h) > c.aux_heading_cos:
+                    out[1 + k] = 1.0
+                    if dep["dead"]:
+                        out[6 + k] = 1.0
+        self._points.append({"x": s.x, "y": s.y, "pl": pl})
+        self._pending = {"x": s.x, "y": s.y, "pl": pl, "heads": heads, "junction": n_front >= 2}
+        return out
+
+    def _record_departure(self, k: int):
+        p = self._pending
+        if p is not None and p["junction"] and k < N_SLOTS - 1 and p["heads"][k] is not None:
+            self._departures.append({"x": p["x"], "y": p["y"], "pl": p["pl"], "h": p["heads"][k],
+                                     "open": True, "dead": False})
 
     def _drive_until_decision(self):
         """Run the driver until a decision is due or the episode ends. Returns (reward, terminated, truncated)."""
@@ -192,7 +253,11 @@ class NavigatorEnv(gym.Env):
         self._prev = {"x": 0.0, "y": 0.0, "h": 0.0, "junction": 0.0, "back": 0.0}
         self._t_last = 0.0
         self.n_decisions = 0
-        return self._obs(), dict(self._info)
+        self._points, self._departures, self._pending = [], [], None
+        # the cue draw uses its own generator (seeded from the episode) so it never shifts the base env's stream
+        rs = np.random.default_rng(None if seed is None else seed + 7919)
+        self._cue = self.cfg.goal_cue_prob >= 1.0 or rs.random() < self.cfg.goal_cue_prob
+        return self._obs(), dict(self._info, goal_cue=self._cue)
 
     def step(self, action):
         k = int(action)
@@ -211,6 +276,7 @@ class NavigatorEnv(gym.Env):
             back = True
         else:
             target, back = slots[k].heading, False
+        self._record_departure(k)
         heading_nav = nav.psi + float(wrap(target - d.psi))   # chosen heading in the navigation frame
         self._prev = {"x": nav.x, "y": nav.y, "h": heading_nav, "junction": float(n_front >= 2),
                       "back": float(back)}
@@ -219,5 +285,5 @@ class NavigatorEnv(gym.Env):
         self.n_decisions += 1
         reward, te, tr = self._drive_until_decision()
         info = dict(self._info, n_decisions=self.n_decisions, invalid=requested != k or penalty > 0, choice=k,
-                    requested=requested)
+                    requested=requested, goal_cue=self._cue)
         return self._obs(), float(reward - penalty), te, tr, info

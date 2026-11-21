@@ -1,0 +1,72 @@
+# Memory round (memory-v3): exit-memory navigators over the frozen learned driver.
+#   python -m scripts.collect_nav_demos --config configs/memnav.yaml        # teacher demonstrations, once
+#   python -m scripts.train_memnav --variant none|gru|graph|exit            # four runs, same everything
+# Steps are decisions (~1.5-2 s of driving each). 240k decisions per variant; with four variants in parallel on
+# 24 cores (~5 worker processes each) expect ~25-35 decisions/s per run, i.e. ~2-2.5 h.
+seed: 0
+n_envs: 32
+envs_per_worker: 6                # ~5-6 worker processes per run: four runs fit 24 cores
+model:                            # ExitMemoryConfig (submarine/memory/exitmem.py); variant comes from the CLI
+  d_model: 64
+  gru: 64
+  n_entries: 32                   # store capacity; state = 64 + 32 x 23 = 800 floats per env
+  memo: 16
+  hidden: 64
+  merge_radius: 1.5               # m
+  sigma: 2.0                      # m
+  ray_length: 14.0                # m
+  gate_init: -2.0                 # memory gate starts at 0.12
+
+ppo:                              # submarine/memory/trainer.py: PPOConfig
+  n_steps: 64                     # x 32 envs = 2048 decisions per update; also the training sequence length
+  epochs: 4
+  minibatch_envs: 8
+  lr: 3.0e-4
+  gamma: 0.99
+  lam: 0.95
+  clip: 0.2
+  ent: 0.01
+  vf: 0.5
+  aux_start: 0.5                  # auxiliary-loss weight, annealed linearly over the whole run
+  aux_end: 0.1
+  max_grad: 0.5
+  target_kl: 0.03
+
+bc:                               # warm start: imitate the map-aware teacher over whole episodes
+  demos: runs/memnav_demos.npz
+  decisions: 60000
+  noise: 0.1                      # random exit away from junctions
+  junction_noise: 0.35            # random exit at junctions: wrong branches, dead ends, returns
+  epochs: 6
+  lanes: 32
+  seq_len: 64
+  lr: 1.0e-3
+  vf_coef: 0.05
+  aux_weight: 0.5
+
+base:
+  driver_actor: runs/driver/driver.npz
+  cruise_speed: 1.2
+  empty_slot: remap
+  aux_labels: true                # ground truth for the aux losses rides at the end of the observation
+  goal_cue_prob: 1.0
+  env:
+    max_steps: 1500
+    sonar: {ping_interval: 0.4}
+    reward: {k_energy: 1.0}
+
+stages:
+  - name: m1_core                 # the basics, including the decoys (goal bearing misleads)
+    steps: 60000
+    goal_cue_prob: 1.0
+    env: {layout: [tunnel, branches, maze, decoy], difficulty: [0.0, 0.5]}
+  - name: m2_memory               # memory scenarios dominate; 30% of dives without the goal cue
+    steps: 100000
+    goal_cue_prob: 0.7
+    env: {layout: [maze, maze, decoy, decoy, loops, loops, branches, breakdown, crack, tunnel],
+          difficulty: [0.0, 0.75]}
+  - name: m3_full                 # full difficulty, currents
+    steps: 80000
+    goal_cue_prob: 0.7
+    env: {layout: [maze, maze, decoy, decoy, loops, loops, branches, breakdown, crack, tunnel],
+          difficulty: [0.0, 1.0], vehicle: {max_current: 0.2}}

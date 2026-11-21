@@ -12,6 +12,12 @@ and discs, with the same wall roughness, and finished exactly like tunnels
              side fissures, some too narrow to enter
   breakdown  boulder choke after a roof collapse: a wide chamber full of rubble
 
+Memory scenarios (memory-v3): situations where the present observation misleads and only memory helps.
+  decoy      the true route detours AWAY from the exit, while long dead-end passages (beyond sonar range)
+             point straight AT it: the goal bearing recommends every decoy; only remembering one already tried
+             avoids going back in
+  loops      a maze with extra passages that close cycles: without memory an agent can circle indefinitely
+
 Difficulty d in [0, 1] narrows passages, adds wiggle / roughness and clutter.
 """
 
@@ -20,7 +26,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.ndimage import distance_transform_edt
 
-LAYOUTS = ("tunnel", "maze", "branches", "crack", "breakdown")
+LAYOUTS = ("tunnel", "maze", "branches", "crack", "breakdown", "decoy", "loops")
 
 
 def _lerp(a, b, t):
@@ -80,8 +86,9 @@ def _disc(x, y, r):
 # ---------------------------------------------------------------------------- layouts
 
 
-def maze(rng, d, world):
-    """Spanning tree over a jittered 6 x 3 grid of junctions: exactly one route, the rest are dead ends."""
+def maze(rng, d, world, extra_edges: int = 0):
+    """Spanning tree over a jittered 6 x 3 grid of junctions: exactly one route, the rest are dead ends.
+    extra_edges > 0 adds that many non-tree passages, closing cycles (the "loops" layout)."""
     cols, rows = 6, 3
     xs = np.linspace(5.0, world.length - 5.0, cols)
     ys = np.linspace(7.0, world.height - 7.0, rows)
@@ -100,13 +107,17 @@ def maze(rng, d, world):
             n = parent[n]
         return n
 
-    edges = []
+    edges, spare = [], []
     for i in order:
         a, b = cand[i]
         ra, rb = root(a), root(b)
         if ra != rb:
             parent[ra] = rb
             edges.append((a, b))
+        else:
+            spare.append((a, b))
+    loops = spare[:extra_edges]                                  # random non-tree passages: each closes a cycle
+    edges = edges + loops
 
     w = _lerp(3.4, 2.2, d)
     wiggle = _lerp(0.4, 1.2, d)
@@ -118,7 +129,52 @@ def maze(rng, d, world):
     s, g = node[(0, r_start)], node[(cols - 1, r_goal)]
     segs += _segments(_path((1.0, s[1]), s, rng, 0.3), w)    # entrance and exit stubs
     segs += _segments(_path(g, (world.length - 1.0, g[1]), rng, 0.3), w)
-    return segs, [], {"junctions": len(node), "dead_ends": _leaves(edges, (0, r_start), (cols - 1, r_goal))}
+    return segs, [], {"junctions": len(node), "dead_ends": _leaves(edges, (0, r_start), (cols - 1, r_goal)),
+                      "loops": len(loops)}
+
+
+def loops(rng, d, world):
+    """Maze with 3-5 extra passages that close cycles."""
+    return maze(rng, d, world, extra_edges=int(rng.integers(3, 6)))
+
+
+def decoy(rng, d, world):
+    """The route makes a long detour away from the exit; dead ends off it point straight at the exit.
+
+    Main route: start -> the far edge of the cave (top or bottom, ~12 m from the goal's height) -> along it ->
+    up/down to the goal. From the detour, 2-3 decoy passages leave toward the goal side (35-65 deg off the
+    detour, so they are distinct passages) and end blind after 7-11 m. Decoys sit only where the goal bearing
+    is closer to the decoy's direction than to the true route's, so a goal-following navigator enters each one."""
+    L, H = world.length, world.height
+    w = _lerp(3.4, 2.4, d)
+    wiggle = _lerp(0.3, 0.8, d)
+    y_goal = H / 2 + rng.uniform(-2.0, 2.0)
+    side = rng.choice([-1.0, 1.0])
+    far = H / 2 + side * (H / 2 - 3.5)                         # the detour runs along the top or bottom edge
+    start, goal = np.array([1.0, y_goal + rng.uniform(-2, 2)]), np.array([L - 1.0, y_goal])
+    way = [start, np.array([6.0, start[1]]), np.array([10.0, far]), np.array([L - 7.0, far]),
+           np.array([L - 5.0, goal[1]]), goal]
+    main = np.vstack([_path(a, b, rng, wiggle)[:-1] for a, b in zip(way[:-1], way[1:])] + [goal[None]])
+    segs = _segments(main, w, rng, 0.1)
+    n = 2 + int(rng.random() < 0.5 + 0.5 * d)
+    made = 0
+    for xj in np.linspace(19.0, 33.0, n) + rng.uniform(-1.0, 1.0, n):
+        i = int(np.argmin(np.abs(main[:, 0] - xj) + 10.0 * (np.abs(main[:, 1] - far) > 2.0)))
+        p = main[i]
+        toward = np.sign(goal[1] - p[1])
+        goal_ang = abs(np.arctan2(goal[1] - p[1], goal[0] - p[0]))   # route runs at ~0 deg
+        ang = np.clip(max(goal_ang + rng.uniform(0.0, 0.35), np.deg2rad(35)), 0, np.deg2rad(65))
+        if abs(goal_ang - ang) >= goal_ang:
+            continue                                            # the goal bearing would not favour this decoy
+        length = min(rng.uniform(8.0, 11.0), (L - 9.0 - p[0]) / np.cos(ang),
+                     (abs(goal[1] - p[1]) + 1.0) / np.sin(ang))
+        if length < 7.0:
+            continue                                            # too short to hide its end from the sonar
+        q = p + length * np.array([np.cos(ang), toward * np.sin(ang)])
+        segs += _segments(_path(p, q, rng, 0.4), w * rng.uniform(0.85, 1.0), rng, 0.1)
+        segs.append(_disc(*q, 0.6 * w))
+        made += 1
+    return segs, [], {"decoys": made}
 
 
 def _leaves(edges, start, goal):
@@ -226,7 +282,8 @@ def breakdown(rng, d, world):
     return segs, boulders, {"boulders": len(boulders)}
 
 
-BUILDERS = {"maze": maze, "branches": branches, "crack": crack, "breakdown": breakdown}
+BUILDERS = {"maze": maze, "branches": branches, "crack": crack, "breakdown": breakdown, "decoy": decoy,
+            "loops": loops}
 
 
 def build_free(rng, cfg, world, noise):

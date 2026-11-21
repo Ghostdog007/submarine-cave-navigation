@@ -303,7 +303,7 @@ class CaveEnv(gym.Env):
         self._camera_obs = self._failures.apply_camera(st.camera) if st.camera is not None else None
 
     def _update_nav_flags(self):
-        if not self._failures.sonar_ok():            # no scan to detect junctions from: no events
+        if not self.cfg.navigation.junction_flags or not self._failures.sonar_ok():   # off / no scan: no events
             self._nav_flags = (0.0, 0.0, 0.0)
             return
         junction, dead_end, event = self._junctions.update(self._sonar_obs, self.sim.sonar.angles,
@@ -338,7 +338,7 @@ class CaveEnv(gym.Env):
         parts = []
         if c.use_sonar:
             parts.append(self._sonar_obs / c.sonar.max_range)
-        parts.append([np.clip(s.u / c.vehicle.u_max, -1, 1), np.clip(s.r / c.vehicle.r_max, -1, 1)])
+        parts.append([min(1.0, max(-1.0, s.u / c.vehicle.u_max)), min(1.0, max(-1.0, s.r / c.vehicle.r_max))])
         if c.goal_cue == "bearing":
             gx, gy = self.cave.goal
             bearing = wrap_angle(np.arctan2(gy - s.y, gx - s.x) - s.psi)
