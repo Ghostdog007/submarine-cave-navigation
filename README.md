@@ -1,4 +1,4 @@
-﻿# submarine-cave-navigation
+# submarine-cave-navigation
 
 **Reinforcement learning for an autonomous submarine in underwater caves: sonar, vision, route memory and a built-in safety filter.**
 
