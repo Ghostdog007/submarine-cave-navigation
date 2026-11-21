@@ -366,7 +366,7 @@ Evaluation: a held-out generalisation matrix (unseen caves, one layout family ne
 stronger currents than in training), comparing the failure-trained agent with and without memory against the
 current agent, the gap follower and the oracle.
 
-## Stage 9: Two-level architecture: learned driver with a built-in safety filter, memory navigator *(in progress)*
+## Stage 9: Two-level architecture: learned driver with a built-in safety filter, memory navigator
 
 ```
  NAVIGATOR (learned, decides at junctions / dead ends / every ~2 s)    exits from the openings detector
@@ -420,12 +420,24 @@ ends), which is the navigator's job.
 - **A1 imitation** of the hand controller (200k steps, noise on executed actions, clean labels; value head
   pretrained on returns): action MSE 0.0225. Imitation-only driver: tunnel 100%, crevasse 50% (hand 70%), 0 crashes.
 - **A2** PPO curriculum (tunnels -> all cave types + slow sonar + currents -> full difficulty), **A3** robustness
-  (sensor failures, blindness supervisor, hull damage). *Training.*
+  (sensor failures, blindness supervisor, hull damage). 6M PPO steps, 2.6 h; episode reward per stage 25.4 / 20.9 /
+  18.3 / 20.4. Most of the skill came from imitation; PPO fine-tuned it (reward +7-15% within the first two stages).
+- **Gate** (same 150 test dives as A0):
+
+  | | Tunnel | Maze | Branches | Crevasse | Boulder choke |
+  |---|---|---|---|---|---|
+  | Hand driver: success / collisions | 100% / 0% | 67% / 0% | 97% / 0% | 80% / 0% | 63% / 0% |
+  | Learned driver: success / collisions | 100% / 0% | 67% / 0% | 97% / 0% | 87% / 0% | 50% / 0% |
+  | Filter intervened (hand -> learned) | 3.5 -> 6.7% | 2.7 -> 2.8% | 1.5 -> 1.1% | 13 -> 16% | 3.9 -> 5.3% |
+
+  Zero collisions and zero hull contacts for both. Paired by cave, the hand driver alone succeeded in 9 caves and the
+  learned one alone in 7: no significant difference (boulder choke 6 vs 2, p ~ 0.3). The learned driver is faster in
+  crevasses (0.89 vs 0.75 m/s) and leans on the filter a little more. Used for phase B.
 - Speed work: workers step 4 envs each (a vector step waits for the slowest worker: rare 10 ms steps and 180 ms
   cave generations of any one env otherwise set the pace), scalar map interpolation (bit-identical): 500 -> ~1,300
   steps/s.
 
-### Phase B: navigators (`configs/navigator.yaml`, `scripts/train_navigator.py`) *(built and tested; training next)*
+### Phase B: navigators (`configs/navigator.yaml`, `scripts/train_navigator.py`)
 
 - One step = one decision; Discrete(5): four exits + turn back. Observation (61): exits (bearing, navigation-frame
   heading, depth, width, narrow), goal cue, dead-reckoned pose, previous decision (pose, heading, at junction?),
@@ -433,6 +445,50 @@ ends), which is the navigator's job.
 - Navigators: none (MLP), **retention** (4 heads, decays 0.5/0.8/0.95/0.99 *per decision*), **retention + junction
   memory** (8 slots keyed by dead-reckoned position; written when leaving a junction and at dead ends; read by
   attention with a distance penalty). Same config, curriculum and budget (180k decisions, about 3,600 dives).
+- Training (three in parallel, 8 workers each): none 67 min, retention 103 min, junction memory 145 min. Final-stage
+  episode reward: none 20.0, retention 4.1, junction memory 4.3.
+
+**Test results** (30 held-out caves per cave type, d = 0.5, sonar every 0.4 s, learned driver; `scripts/eval_navigator`):
+
+| Success | Tunnel | Maze | Branches | Crevasse | Boulder choke | All |
+|---|---|---|---|---|---|---|
+| Random exits | 0% | 0% | 0% | 0% | 0% | 0% |
+| Greedy heuristic (exit nearest the goal cue) | 100% | **67%** | **100%** | 90% | 60% | **83%** |
+| Navigator, no memory | 100% | 57% | 90% | **100%** | **63%** | 82% |
+| Navigator, retention | 100% | 20% | 60% | 97% | **67%** | 69% |
+| Navigator, retention + junction memory | 100% | 27% | 77% | **100%** | 57% | 72% |
+
+Maze dead-end entries / re-entries per dive: greedy 1.33 / 0.50, none 1.47 / 0.43, retention 1.53 / 0.40, junction
+memory 1.60 / 0.60.
+
+- **Safety held:** 1 hull breach in 750 navigator test dives (retention, crevasse), 0 for every other navigator
+  including random exit choice. The end-to-end agents of stage 7 crashed in 13-60% of mazes.
+- **Memory did not help; it hurt.** Neither memory navigator reduced dead-end entries or re-entries, and both lost
+  success in mazes and branches.
+
+**Why (diagnosed from action distributions and the memory replays, `scripts/nav_videos.py`):**
+
+1. **A free "carry on" action.** Choosing an empty exit slot keeps the current heading for a 0.1 penalty. At maze
+   junctions the memoryless navigator puts 38% of its probability there (and 39% on the rightmost exit: a crude
+   wall-following rule that works reasonably); retention puts 64% there. At a dead end, "carry on" means pressing
+   into the wall until the episode times out: the retention replay of maze cave 1000000 sits at the end of the first
+   dead end from 20 s to 150 s. The recurrent model, with noisier gradients, fell into this default hardest.
+2. **The junction memory recalls but does not act.** In the same cave the junction-memory navigator stores the dead
+   end and recalls it with 100% attention at every decision for 16 s, yet keeps choosing to press on.
+3. **Duplicate writes evict useful memories.** Each decision at a dead end writes the dead end again (the flag is
+   set at every decision there). Within 15 s the same dead end filled all 8 slots and every junction memory was
+   overwritten (replay at 70 s: "0 junctions, 8 dead ends stored").
+4. **The crash:** pressing forward at a crevasse bend while already inside the filter's 0.52 m floor (measured 0.45 m).
+   There the filter only forbids getting closer *as seen by sonar*; the wall corner fell between two of the 32 beams
+   and the hull touched at 0.33 m/s.
+
+The memory replays are verified against the agent's state: every displayed memory matches a write event (26 writes,
+0 unexplained in maze cave 1000000).
+
+**Proposed fixes (not yet run):** mask empty slots so every decision is a real exit or turn-back; write a dead end
+or junction only if no slot already holds one within ~2 m (update it instead); warm-start the navigators by imitation
+of a map-aware teacher before PPO; inside the filter floor allow only clearance-increasing motion, capped at
+0.2 m/s; then retrain and re-evaluate the three navigators.
 
 ## Training infrastructure and speed
 
@@ -498,8 +554,8 @@ identical except batch size and device; the GPU arm was stopped at 500k steps):
 
 ## Next
 
-1. Finish stage 9: learned driver gate, train the three navigators, test evaluation per cave type against the
-   archived end-to-end agents, the gap follower and the oracle; replays with the junction-memory display.
+1. Stage 9 fixes (see phase B): masked exits, deduplicated memory writes, warm-started navigators, filter floor
+   patch; retrain and re-evaluate the three navigators.
 2. Planned extension: place memory + speed modes (faster through sections already passed safely), return-to-base
    scenario.
 3. LSTM comparison against retention; curate `videos/` once the memory navigators are confirmed in complex caves.
