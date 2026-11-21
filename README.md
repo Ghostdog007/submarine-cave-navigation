@@ -8,15 +8,15 @@ that degrades in **murky water**. Agents are trained with PPO (Stable-Baselines3
 controllers and a map-aware oracle on held-out caves.
 
 > **Status (Nov 2026): two-level architecture: built, trained and evaluated; memory fixes next.** The end-to-end agents (one network
-> driving at 10 Hz *and* remembering junctions) reached their limits: memory cut dead-end re-entries ~11Ã—, but
+> driving at 10 Hz *and* remembering junctions) reached their limits: memory cut dead-end re-entries ~11×, but
 > crashes prevented any gain in success, and a safety filter bolted on after training made the agents stall.
 > Their code is removed, their runs are in `runs/archive/` and their results in [progress.md](progress.md).
 >
 > | Phase | State |
 > |---|---|
-> | A0: hand-written driver + built-in safety filter + openings detector | âœ… 0 crashes in 150 test dives (gap follower: 23â€“90%) |
-> | A1â€“A3: learned driver (imitation, then PPO curriculum with slow sonar, currents, sensor failures, hull damage) | âœ… 0 crashes in 150 test dives; as good as the hand driver |
-> | B: navigators (no memory / retention / retention + junction memory) | âœ… trained: 1 crash in 750 test dives; no memory 82% success (greedy heuristic 83%); **memory navigators worse (69â€“72%)** |
+> | A0: hand-written driver + built-in safety filter + openings detector | ✅ 0 crashes in 150 test dives (gap follower: 23–90%) |
+> | A1–A3: learned driver (imitation, then PPO curriculum with slow sonar, currents, sensor failures, hull damage) | ✅ 0 crashes in 150 test dives; as good as the hand driver |
+> | B: navigators (no memory / retention / retention + junction memory) | ✅ trained: 1 crash in 750 test dives; no memory 82% success (greedy heuristic 83%); **memory navigators worse (69–72%)** |
 > | B fixes: masked exits, deduplicated memory writes, warm start, filter floor patch | next (diagnosis in [progress.md](progress.md#stage-9-two-level-architecture-learned-driver-with-a-built-in-safety-filter-memory-navigator)) |
 
 ![game-style renderer](docs/figures/game_renderer_drive.png)
@@ -81,9 +81,9 @@ design is meant to fix that.
   filter never surprises it.
 - **Memory handles what it's good at: choosing exits.** A junction-memory slot means exactly "at junction #2
   I took opening B; it was a dead end".
-- **Cheaper training:** the navigator makes ~30â€“75 decisions per episode instead of ~1,500 network calls, and
+- **Cheaper training:** the navigator makes ~30–75 decisions per episode instead of ~1,500 network calls, and
   the 10 Hz control runs as plain code inside the parallel workers. That should cut wall-clock time per run
-  ~5â€“10Ã— (to be measured).
+  ~5–10× (to be measured).
 
 | Package | Role |
 |---|---|
@@ -108,14 +108,14 @@ design is meant to fix that.
 
 ## Features
 
-- **Procedural caves** from an integer seed, with a difficulty knob d âˆˆ [0, 1]: width, cracks down to 1.7 m,
+- **Procedural caves** from an integer seed, with a difficulty knob d ∈ [0, 1]: width, cracks down to 1.7 m,
   rough walls, pillars, winding paths. Every cave is checked to be solvable. Train / validation / test seeds are disjoint.
 - **Cave layouts modelled on real exploration hazards:** single tunnel, maze with dead ends, misleading side
   branches, glacier crevasse with squeezes, boulder choke; plus a silt-out scenario.
 - **Energy model:** power from thrust, turning and on-board load; an evaluation metric and an optional reward penalty.
 - **Vehicle:** thrust with drag, a lagged turn-rate command, optional water current; 10 Hz control.
 - **Sensors:**
-  - 32-beam 360Â° sonar: noise, dropout, configurable ping rate, field of view and beam width.
+  - 32-beam 360° sonar: noise, dropout, configurable ping rate, field of view and beam width.
   - Forward camera: 64-pixel scanline with an underwater image model (attenuation, backscatter, speckle).
   - Murky-water patches that blind the camera but not the sonar.
 - **Gymnasium environment** with reward shaping based on shortest-path distance through the cave
@@ -221,12 +221,12 @@ runs/          training runs and evaluations (git-ignored); runs/archive/ holds 
 
 | | |
 |---|---|
-| World | 50 m Ã— 30 m, 0.2 m grid, top-down 2D |
-| Action | `[thrust, yaw command]` âˆˆ [âˆ’1, 1]Â², 10 Hz |
+| World | 50 m × 30 m, 0.2 m grid, top-down 2D |
+| Action | `[thrust, yaw command]` ∈ [−1, 1]², 10 Hz |
 | Vehicle | max 1.5 m/s (reverse 0.75), turn rate up to 1 rad/s with 0.3 s lag, disc radius 0.4 m |
 | Observation (sonar) | 32 ranges + speed + yaw rate + goal bearing/distance + previous action (39 values) |
-| Observation (camera) | `{"camera": 1Ã—64 image, "state": vector}` |
-| Reward | +1 per metre of shortest-path progress, âˆ’0.01 per step, âˆ’0.01â€–Î”aâ€–Â², +20 goal, âˆ’10 collision |
+| Observation (camera) | `{"camera": 1×64 image, "state": vector}` |
+| Reward | +1 per metre of shortest-path progress, −0.01 per step, −0.01‖Δa‖², +20 goal, −10 collision |
 | Episode end | goal within 1.5 m, collision, or 60 s |
 
 Full details in [context.md](context.md) and [progress.md](progress.md).
@@ -239,6 +239,6 @@ Full details in [context.md](context.md) and [progress.md](progress.md).
   in one process.
 - **Several trainings at once:** use `--threads 4` (PyTorch threads per learner) so they don't oversubscribe the CPU.
 - **GPU:** not worth it for these small networks. Updates get faster, but acting one step at a time is slower on
-  the GPU, so end-to-end training was 2.7Ã— slower (see the A/B check in progress.md). Train on CPU.
+  the GPU, so end-to-end training was 2.7× slower (see the A/B check in progress.md). Train on CPU.
 - **Reproducibility:** caves, sensor noise and currents are seeded. Evaluation uses fixed per-episode seeds, so all
   policies face identical conditions and replays reproduce evaluation numbers exactly.
