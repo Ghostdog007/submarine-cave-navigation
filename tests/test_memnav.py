@@ -18,8 +18,7 @@ def make_obs(n, x=0.0, y=0.0, exits=((1.0, 0.0),), junction=False, dead=False, p
     s = o[:, OBS["slots"]].view(n, N_SLOTS, SLOT_DIM)
     for k, (cx, cy) in enumerate(exits):
         s[:, k, 0], s[:, k, 1], s[:, k, 3], s[:, k, 4], s[:, k, 5] = 1.0, 1.0, cx, cy, 0.5
-    s[:, N_SLOTS - 1, 0], s[:, N_SLOTS - 1, 3] = 1.0, -1.0
-    o[:, OBS["slots"]] = s.reshape(n, -1)
+    s[:, N_SLOTS - 1, 0], s[:, N_SLOTS - 1, 3] = 1.0, -1.0       # (s is a view: o is written in place)
     o[:, OBS["x"]], o[:, OBS["y"]] = x / POS_SCALE, y / POS_SCALE
     o[:, OBS["cos_psi"]] = 1.0
     o[:, OBS["junction"]], o[:, OBS["dead_end"]] = float(junction), float(dead)
