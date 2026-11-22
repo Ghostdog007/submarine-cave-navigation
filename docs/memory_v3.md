@@ -129,3 +129,68 @@ against the write flags) and the memory's verdict on each exit arrow ("[known de
 | Navigator switches off CaveEnv's per-step opening count (`navigation.junction_flags`), used only by the end-to-end agents | ~11% |
 | Hand controller's scan-only terms (corridor reach, front distance, side minima) cached per sonar ping | ~5–7% |
 | Scalar `np.clip` in hot paths replaced by `min`/`max` | ~5% |
+
+## Results of the first v3 run (22 Nov 2026): negative, with known causes
+
+Four variants trained in parallel: 240k decisions each, ~2.5–3 h, 5 workers each. Then a test on 30 held-out caves
+per cave type (d = 0.5). Raw tables, per-episode CSVs and training logs are in [`results/`](results/).
+
+| Success | Tunnel | Maze | Branches | Crevasse | Boulder choke | Decoy | Loops | 5 standard types | All 7 |
+|---|---|---|---|---|---|---|---|---|---|
+| Oracle (true map) | 100% | 100% | 100% | 100% | 80% | 100% | 100% | 96.0% | 97.1% |
+| Greedy heuristic | 100% | 70% | 97% | 90% | 53% | 63% | 90% | 82.0% | 80.5% |
+| none (v3) | 100% | 53% | 77% | 93% | 43% | 100% | 73% | 73.3% | 77.1% |
+| gru | 100% | 37% | 80% | 93% | 50% | 100% | 70% | 72.0% | 75.7% |
+| graph | 100% | 33% | 67% | 93% | 50% | 100% | 63% | 68.7% | 72.4% |
+| exit | 100% | 47% | 77% | 93% | 47% | 100% | 67% | 72.7% | 75.7% |
+| *Round 2 retention (`main`)* | *100%* | *83%* | *97%* | *93%* | *70%* | – | – | *88.7%* | – |
+
+Paired by cave (all 7 types): exit vs none 6 / 9 caves only-one-solved (p = 0.61); exit vs gru 8 / 8; exit vs graph
+13 / 6 (p = 0.17). **No variant beats another significantly, and every v3 variant is below greedy and round 2.**
+
+**Memory-wipe ablation** (memory erased at every decision):
+
+| Success, normal → wiped | Maze | Loops | Boulder choke |
+|---|---|---|---|
+| exit | 47 → 43% | 67 → 63% | 47 → 37% |
+| graph | 33 → 50% | 63 → 60% | 50 → 43% |
+| gru | 37 → 47% | 70 → 70% | 50 → 53% |
+
+Dead-end re-entries for exit go up when its memory is wiped (loops 0.30 → 0.63, boulder choke 1.63 → 1.97). Exit memory
+is the only variant whose memory consistently helps itself, but only a little. Graph memory *hurts* in mazes.
+
+**What the training logs showed** ([`results/train_memory_metrics.txt`](results/train_memory_metrics.txt)):
+- **The store variants learned the memory facts.** Recall of "known dead end" was 83–91% and of "taken before"
+  83–88%, against ~45% / ~50% for none and gru.
+- **The policy hardly used those facts.** The memory gate stayed at 0.16–0.17 for exit (init 0.12) and 0.21–0.25 for
+  graph.
+
+**Why it failed (diagnosed, not yet fixed):**
+1. **Weaker training overall.** The v3 memoryless navigator (73.3%) is far below round 2's (83.3%, SB3 PPO). Several
+   things changed at once: the curriculum (decoys, loops, 30% blind dives), my custom PPO trainer, auxiliary losses on
+   a network without memory, and the budget. A controlled run of `none` with round 2's exact setup on this trainer
+   would separate them.
+2. **The decoy scenario is solvable without memory.** Every variant scores 100%, because the layout is too regular:
+   the route always runs along the far edge and the decoys always point at the goal. The policy learned "don't take
+   the goal-pointing exit". Decoys must be randomised, so that the goal-pointing exit is sometimes the route.
+3. **Two auxiliary labels are flawed:**
+   - *"taken before"* is already true right after leaving a junction (still within 2 m). It should require ≥ 6 m of
+     travel away, as loop closure does.
+   - *"known dead end"* is credited to the latest open departure, which in rubble chambers often isn't the passage
+     that led there. Even the oracle "avoids" it only 11% of the time in boulder chokes.
+
+   The memory was trained to reproduce these labels, and the *avoid* / *untried* metrics rest on them, so those
+   metrics are not reported as results. The graph variant reads the store through fixed rules and is hurt most.
+4. **The memory gate initialised at 0.12 stayed nearly shut.** GTrXL-style gating suits deep residual stacks; here it
+   just muted a small, informative signal.
+
+**Proposed v3.1** (not started):
+- fix both labels;
+- randomise decoys;
+- start the gate open (~0.5), or feed the memory facts straight into each exit's score;
+- add the controlled trainer check.
+
+Until then, **round 2's retention navigator on `main` remains the best model** (88.7%).
+
+Comparison replays (the same caves as `main`'s `videos/08_round2`, plus the hardest decoy and loops caves):
+`videos/09_memory_v3/` (see its README).

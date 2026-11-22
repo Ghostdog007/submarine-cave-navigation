@@ -18,7 +18,7 @@ controllers and a map-aware oracle on held-out caves.
 > | A1–A3: learned driver (imitation, then PPO curriculum with slow sonar, currents, sensor failures, hull damage) | ✅ 0 crashes in 150 test dives; as good as the hand driver |
 > | B: navigators (no memory / retention / retention + junction memory) | ✅ trained: 1 crash in 750 test dives; no memory 82% success (greedy heuristic 83%); **memory navigators worse (69–72%)** |
 > | B fixes: masked exits, deduplicated memory writes, warm start, filter floor patch | ✅ built; round 2 training on `main` (diagnosis in [progress.md](progress.md#stage-9-two-level-architecture-learned-driver-with-a-built-in-safety-filter-memory-navigator)) |
-> | **M (this branch, `memory-v3`): exit memory, trained by auxiliary losses on scenarios that need memory** | **built; model forward pass checked; tests written (`tests/test_memnav.py`) but not yet run; not trained** (see [Memory v3](#memory-v3-exit-memory-this-branch) and [docs/memory_v3.md](docs/memory_v3.md)) |
+> | **M (this branch, `memory-v3`): exit memory, trained by auxiliary losses on scenarios that need memory** | **trained and tested; negative result.** 132/132 tests pass. The memory learned its facts (85–90% recall), but the policy barely used them (gate ~0.17). Every variant is at 69–73% on the standard caves, below greedy (82%) and round 2's retention (88.7%). Causes: flawed aux labels, a decoy layout solvable without memory, weaker training, a gate that stayed shut. v3.1 fixes proposed in [docs/memory_v3.md](docs/memory_v3.md#results-of-the-first-v3-run-22-nov-2026-negative-with-known-causes) |
 
 ![game-style renderer](docs/figures/game_renderer_drive.png)
 
