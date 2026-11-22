@@ -22,7 +22,7 @@ controllers and a map-aware oracle on held-out caves.
 > | M v3.1: reward that prices forgetting | trained and tested: **no gain for memory** (exit 70.7%, no memory 72.0%); it made both explore untried exits more |
 > | M v3.2: event-triggered per-exit memory gate + belief bias | trained and tested: **memory is used selectively** (gate 0.83 at known dead ends vs 0.40 at fresh junctions) and known dead ends are avoided most of any model (61–70%), but success did not rise (66.7% standard, 48–55% rings / hub) |
 > | M memory caves (`rings`, `hub`) + wall-follower baselines | built: the old caves turned out **solvable without memory**; on the new ones every reactive rule fails (greedy 5%, wall following 37–42%, oracle 100%) and v3 exit memory re-enters dead ends ~25% less than no memory. 148/148 tests pass |
-> | **M v3.3: v3.2 trained on the memory caves (+ a memoryless control)** | **training** (started 22 Nov ~23:55), with the speed-ups below |
+> | **M v3.3: v3.2 trained on the memory caves (+ a memoryless control)** | **training** (started 22 Nov 23:52), with the speed-ups below |
 > | Training speed-ups | memory reads as batched matmuls (same outputs, learner ~2× faster); 60 envs on 15 workers, minibatches of 15, warm start in 32 lanes, 1 learner thread. Measured: warm start ~3–4× faster, PPO 1–1.9× (stage 3 is now limited by the cave simulation). The GPU was measured *slower* for this tiny step-by-step model |
 
 ![game-style renderer](docs/figures/game_renderer_drive.png)
@@ -120,6 +120,32 @@ design is meant to fix that.
 
 ## Memory v3: exit memory (this branch)
 
+### The story so far (22–23 Nov 2026)
+
+| Step | What we tried | What we found |
+|---|---|---|
+| **v3** | Exit memory: a store of junctions and dead ends, read once per exit, trained by auxiliary "what do you remember?" losses. Four variants (none / gru / graph / exit) | The memory **knew** its facts (85–90% recall) but the policy **ignored** them: its gate stayed ~0.17, all variants 69–73%, below a greedy rule (82%) |
+| **v3.1** | A reward that prices forgetting: progress paid only for new ground, small penalties for re-entering dead ends, re-taking exits and U-turn loops, an exploration bonus, the goal cue hidden in 70% of dives | Both models explored more (untried exits 2–4× more often), but memory still did not help: **no memory did best** |
+| **Diagnosis** | Wall-follower baselines; blind tests | **The caves never needed memory.** "Keep a hand on the wall" solves every old cave; a memoryless policy learned such a reactive rule and re-entered dead ends as rarely as the oracle (0.26 vs 0.24 per dive) |
+| **Memory caves** | `rings` (start inside two rings: both walls are islands) and `hub` (one chamber, dead-end spokes pointing at the exit) | Every reactive rule collapses (greedy 5%, wall following 37–42%, oracle 100%). **First real memory signal:** v3 exit memory re-enters dead ends ~25% less than its memoryless twin |
+| **v3.2** | Event-triggered per-exit memory gate + belief bias + reliance probes | **Breakthroughs below.** Memory is used *when it matters* and known dead ends are avoided most of any model, but success did not rise: its training caves still did not reward memory, so RL pruned it |
+| **Speed** | Profiling | The memory model was per-op-overhead bound, not simulation-bound. Batched matmul reads (same outputs) + bigger batches: warm start 3–4× faster, PPO 1–1.9×. GPU measured slower for this tiny model |
+| **v3.3** | v3.2 trained on rings and hub, with a memoryless control trained identically | **Training** (started 22 Nov 23:52) |
+
+**v3.2 breakthroughs:**
+1. **The memory gate finally moves, and selectively.** The old single gate never moved: it was a redundant scale
+   with no learning signal. The event gate learned to open at a known dead end (0.83–0.97) and stay half-closed at
+   a fresh junction (0.40–0.82): memory switches on *after* the events that make the past relevant.
+2. **Knowing now turns into acting.** With the belief bias, a known dead-end exit is avoided 61–70% of the time
+   (v3: 37–48%), and v3.2 has the fewest dead-end re-entries on rings / hub with the cue (1.22 per dive).
+3. **Memory use can be measured.** Re-scoring decisions with the memory removed showed that at a known dead end
+   memory changed the choice 39% of the time after the warm start, against ~9% at fresh junctions.
+4. **And it showed the real bottleneck:** during RL that 39% fell to 7%, while RL strengthened the simple belief
+   rule (w_dead −1.73 → −1.82). On caves that do not reward memory, RL keeps only its cheapest useful part.
+   Hence v3.3.
+
+### Exit memory: the design
+
 Round 1 showed the navigators **recalled the right memory and ignored it**. The causes were a free "carry on"
 action, no training signal for what the memory should hold, and duplicate writes. Memory v3 redesigns the
 navigator's memory around one question per exit: *what do I know about this exit?* Every piece comes from
@@ -165,7 +191,7 @@ the old end-to-end agents use. The hand controller's scan-only terms are cached 
 and the learner's memory is a few MB: rollouts are 32 × 64 × 72 floats, and the recurrent state is at most
 800 floats per env.
 
-### Running it (tomorrow's plan)
+### Running it (v3)
 
 ```powershell
 # 0. tests (new: tests/test_memnav.py), then a 2-minute smoke run
@@ -307,6 +333,29 @@ that include them. Two runs: `exit` (event gate + belief bias) and a memoryless 
 (`train_memnav` drops the gate / bias settings for variants without a store). Evaluation uses different cave seeds
 from training, so rings / hub stay unseen caves. **The question:** with caves where forgetting costs, does RL keep
 the memory instead of pruning it, and does exit memory beat its memoryless twin on rings / hub?
+
+**What the v3.3 memory model should be able to do** (and what to look for in the replays):
+- **rings:** go round the inner ring at most once, recognise the place ("RECOGNISED a place it has been"), and at
+  the gap take the exit it has not tried, instead of circling. The memoryless control and the wall follower are
+  expected to circle.
+- **hub:** after a dead-end spoke, come back to the chamber and choose a *different* spoke ("AVOIDED … believes
+  dead end"), instead of re-entering the one it just left. Greedy is expected to re-enter the same spoke forever.
+- **its gate:** open after a dead end or on a revisit ("memory gate 0.9 ← dead end 1 dec. ago"), low at fresh
+  junctions.
+- **in numbers:** clearly fewer dead-end re-entries and higher success than the v3.3 control on rings / hub (with
+  and without the goal cue), the reliance probes staying high at known dead ends through training instead of
+  falling to ~7%, and no loss on the old cave types. The oracle (100%) is the ceiling; "clearly better than its
+  memoryless twin" is the bar.
+
+**Comparison videos** (rings and hub, blind dives), five navigators side by side:
+
+| In the video | Run | Memory | Trained on rings / hub |
+|---|---|---|---|
+| New memory model | `memnav_c_exit` (v3.3) | yes (event gate + belief bias) | yes |
+| New model without memory | `memnav_c_none` (v3.3 control) | no | yes |
+| Old memory model | `memnav_exit` (v3) | yes | no |
+| Wall follower | `nav-wall-left` (a fixed rule, not trained) | no | |
+| Oracle | `nav-oracle` (a fixed rule that reads the true map) | sees the map | |
 
 ```powershell
 python -m scripts.collect_nav_demos --config configs/memnav_caves.yaml --workers 8    # demos incl. rings, hub
