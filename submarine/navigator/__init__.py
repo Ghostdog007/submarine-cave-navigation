@@ -31,6 +31,30 @@ class GreedyNavigator:
         return int(front[int(np.argmax(score))])
 
 
+class WallFollowerNavigator:
+    """Keep one hand on the wall: at every decision take the forward exit furthest to that side (left = largest
+    bearing); turn back only at a dead end. Ignores the goal cue, no memory. The classic reactive maze rule: it
+    reaches the exit whenever the start and the exit lie on the same wall (every simply connected cave), so a
+    memory model must beat it to show its memory matters."""
+
+    def __init__(self, side: str = "left"):
+        if side not in ("left", "right"):
+            raise ValueError("side must be 'left' or 'right'")
+        self.side = side
+        self.name = f"nav-wall-{side}"
+
+    def reset(self):
+        pass
+
+    def act(self, obs: np.ndarray) -> int:
+        s = obs[OBS["slots"]].reshape(N_SLOTS, SLOT_DIM)
+        front = [k for k in range(N_SLOTS - 1) if s[k, 0] > 0.5]
+        if not front:
+            return N_SLOTS - 1
+        b = [np.arctan2(s[k, 2], s[k, 1]) for k in front]
+        return int(front[int(np.argmax(b) if self.side == "left" else np.argmin(b))])
+
+
 class OracleNavigator:
     """Map-aware teacher (privileged: reads the true map, so only for demonstrations and as an upper bound).
     For each offered exit it marches along the exit's direction from the true position (stopping at the first

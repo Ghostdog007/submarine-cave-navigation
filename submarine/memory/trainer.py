@@ -26,7 +26,7 @@ import numpy as np
 import torch as th
 from torch import nn
 
-from submarine.navigator.nav_env import AUX_DIM, OBS_DIM
+from submarine.navigator.nav_env import AUX, AUX_DIM, OBS, OBS_DIM
 
 from .exitmem import ExitMemoryNet, aux_targets
 
@@ -125,7 +125,10 @@ class RecurrentPPO:
         start_b, done_b, trunc_b = th.zeros(T, N), th.zeros(T, N), th.zeros(T, N)
         for t in range(T):
             obs_b[t], start_b[t] = self._obs, self._start
+            s_prev = self._state
             logits, v, _, self._state = self.net.step(self._obs, self._state, self._start)
+            if self.net.cfg.has_store and t % 4 == 0:
+                self._probe(logits, s_prev)
             dist = th.distributions.Categorical(logits=logits)
             a = dist.sample()
             act_b[t], logp_b[t], val_b[t] = a, dist.log_prob(a), v
@@ -159,6 +162,37 @@ class RecurrentPPO:
         self.num_timesteps += T * N
         return {"obs": obs_b, "act": act_b, "logp": logp_b, "val": val_b, "adv": adv, "ret": adv + val_b,
                 "start": start_b, "state0": state0}
+
+    # ------------------------------------------------------------------ reliance probes
+    @th.no_grad()
+    def _probe(self, logits, s_prev):
+        """How much this decision depends on memory: the same step with the memory read zeroed (and no belief
+        bias). Bucketed by situation, from the true labels: known_dead (an exit here really leads to a known dead
+        end), revisit (back at an earlier decision point), fresh (a junction with no history). Logged as
+        memory/reliance_kl_*, memory/choice_change_*, memory/gate_* (event gate)."""
+        net, o = self.net, self._obs
+        gate = net.last_gate
+        abl = net.step(o, s_prev, self._start, ablate=True)[0]
+        valid = valid_mask(o)
+        p = th.softmax(logits, -1)
+        kl = (p * (th.log_softmax(logits, -1) - th.log_softmax(abl, -1))).where(valid, th.zeros_like(p)).sum(-1)
+        changed = (logits.argmax(-1) != abl.argmax(-1)).float()
+        lab = o[:, OBS_DIM:OBS_DIM + AUX_DIM]
+        dead = ((lab[:, AUX["dead_known"]] > 0.5) & valid).any(-1)
+        loop = lab[:, AUX["loop"]] > 0.5
+        junction = o[:, OBS["junction"]] > 0.5
+        buckets = {"all": th.ones_like(loop), "known_dead": dead, "revisit": loop & ~dead,
+                   "fresh": junction & ~loop & ~dead}
+        g = None if gate is None else (gate * valid).sum(-1) / valid.sum(-1)
+        rel = getattr(self, "_rel", None)
+        if rel is None:
+            rel = self._rel = {}
+        for name, m in buckets.items():
+            if m.any():
+                rel.setdefault(f"memory/reliance_kl_{name}", []).extend(kl[m].tolist())
+                rel.setdefault(f"memory/choice_change_{name}", []).extend(changed[m].tolist())
+                if g is not None:
+                    rel.setdefault(f"memory/gate_{name}", []).extend(g[m].tolist())
 
     # ------------------------------------------------------------------ update
     def update(self, b):
@@ -208,6 +242,13 @@ class RecurrentPPO:
                     "train/entropy_loss": -out["train/ent"], "train/early_stop": float(stop)})
         if self.net.gate is not None:
             out["train/memory_gate"] = float(th.sigmoid(self.net.gate))
+        if getattr(self.net, "w_belief", None) is not None:
+            out["train/belief_w_dead"], out["train/belief_w_taken"] = (float(v) for v in self.net.w_belief.detach())
+        rel = getattr(self, "_rel", None) or {}
+        out.update({k: float(np.mean(v)) for k, v in rel.items() if v})
+        if "memory/gate_all" in out:
+            out["train/memory_gate"] = out["memory/gate_all"]
+        self._rel = {}
         return out
 
     def learn(self, steps: int, tb_step0: int = 0):

@@ -144,6 +144,9 @@ class ExitMemoryTrace:
         self.model = m if m.cfg.has_store else None           # store variants: decoded entries
         self.beliefs = None                                   # {taken (5,), dead_known (5,), loop} last decision
         self.revisit = False
+        self.gate_k = None                                    # event gate (v3.2): per exit at the last decision
+        self.triggers: list[str] = []                         # ... and the events that were active
+        self._gate_open = False
         self.log: list[tuple[float, str]] = []
         self.markers: list[dict] = []
         self.recall: list[dict] = []
@@ -161,13 +164,40 @@ class ExitMemoryTrace:
 
     @property
     def gate(self):
+        if self.gate_k is not None:                           # event gate: mean over the exits on offer
+            return float(self.gate_k[self._valid].mean()) if self._valid.any() else float(self.gate_k.mean())
         g = getattr(self.net, "gate", None)
         return None if g is None else float(1 / (1 + np.exp(-float(g.detach()))))
+
+    def _read_triggers(self):
+        """Names of the gate's trigger events that were active at the last decision."""
+        from submarine.memory.exitmem import EVENTS
+        ev = getattr(self.net, "last_events", None)
+        if ev is None:
+            return []
+        e = dict(zip(EVENTS, ev[0].numpy()))
+        d = self.net.cfg.event_decay
+        out = []
+        if e["dead_end_recent"] > 0.2:
+            n = int(round(np.log(max(e["dead_end_recent"], 1e-6)) / np.log(d)))
+            out.append("dead end now" if n == 0 else f"dead end {n} dec. ago")
+        if e["turned_back_recent"] > 0.2:
+            out.append("turned back")
+        if e["stale"] > 0.5:
+            out.append("old ground")
+        if e["revisit_belief"] > 0.5:
+            out.append("revisit")
+        if e["no_cue"] > 0.5:
+            out.append("no cue")
+        return out
 
     def hud(self) -> list[str]:
         name, _, what = self.ARCH[self.variant]
         g = self.gate
-        lines = [f"ARCHITECTURE: {name}" + (f"   memory gate {g:.2f}" if g is not None else "") + f"   ({what})"]
+        gtxt = "" if g is None else f"   memory gate {g:.2f}" + (
+            f" <- {', '.join(self.triggers)}" if self.gate_k is not None and self.triggers else
+            (" (event gate: no trigger)" if self.gate_k is not None else ""))
+        lines = [f"ARCHITECTURE: {name}" + gtxt + ("" if self.gate_k is not None else f"   ({what})")]
         parts = []
         if self.model is not None:
             n_j = sum(not m["dead_end"] for m in self.markers)
@@ -198,6 +228,16 @@ class ExitMemoryTrace:
         if aux is None:
             return
         self.beliefs = {"taken": aux["taken"], "dead_known": aux["dead_known"], "loop": float(aux["loop"])}
+        lg = getattr(self.net, "last_gate", None)
+        if lg is not None:                                    # event gate (v3.2)
+            _, vmask = self.net.last_reads
+            self._valid = vmask[0].numpy().astype(bool)
+            self.gate_k = lg[0].numpy()
+            self.triggers = self._read_triggers()
+            g = self.gate
+            if g > 0.7 and not self._gate_open:
+                self.log.append((t, f"GATE OPENED {g:.2f} <- " + (", ".join(self.triggers) or "no trigger")))
+            self._gate_open = g > 0.6
         rev = self.beliefs["loop"] > 0.5
         if rev and not self.revisit:
             self.log.append((t, f"RECOGNISED a place it has been ({100 * self.beliefs['loop']:.0f}%)"))
@@ -388,6 +428,9 @@ def record_nav_replay(nav, cfg, layout: str, cave_seed: int, difficulty: float, 
                     if b["taken"][k] > 0.5:                        # filled dot: believes already taken
                         pygame.draw.circle(cv, acol, p, 5)
                         lab += f" BEEN {100 * b['taken'][k]:.0f}%"
+                    gk = getattr(trace, "gate_k", None)            # event gate: how much memory this exit uses
+                    if gk is not None:
+                        lab += f" mem {gk[k]:.2f}"
                 cv.blit(font.render(lab, True, col), (p[0] + 4, p[1] - 8))
         # every v3 variant: architecture badge; a pulsing ring on the sub while it believes it is revisiting
         if v3:
@@ -431,6 +474,7 @@ def record_nav_replay(nav, cfg, layout: str, cave_seed: int, difficulty: float, 
             for i, l in enumerate(lines):
                 col = ((120, 230, 255) if "STORED" in l else (120, 255, 140) if "AVOIDED" in l
                        else (255, 150, 60) if "RECOGNISED" in l
+                       else (230, 140, 255) if "GATE" in l
                        else (255, 110, 110) if ("ENTERED" in l or "PENALTY" in l)
                        else (255, 235, 120))
                 cv.blit(font.render(l, True, col), (18, 54 + 18 * i))

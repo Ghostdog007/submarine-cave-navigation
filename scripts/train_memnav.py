@@ -74,7 +74,13 @@ def main():
     k = n_envs // args.workers if args.workers else int(C.get("envs_per_worker", 4))
     if n_envs % k:                                            # fail now, not after a 10-minute warm start
         raise ValueError(f"n_envs ({n_envs}) must be a multiple of envs per worker ({k})")
-    net = ExitMemoryNet(ExitMemoryConfig(variant=args.variant, **C.get("model", {})))
+    model_cfg = dict(C.get("model", {}))
+    if args.variant not in ("graph", "exit"):                 # the event gate and the belief bias belong to the
+        dropped = [k_ for k_ in ("gate", "belief_bias", "bias_init", "event_decay") if model_cfg.pop(k_, None)
+                   is not None]                               # memory: a memoryless control trains without them
+        if dropped:
+            log(f"variant={args.variant}: no store, so no {', '.join(dropped)} (control)")
+    net = ExitMemoryNet(ExitMemoryConfig(variant=args.variant, **model_cfg))
     n_params = sum(p_.numel() for p_ in net.parameters())
     log(f"variant={args.variant}: {n_params} parameters, state {net.cfg.state_size} floats/env, {n_envs} envs on "
         f"{n_envs // k} workers, stages {[s['name'] for s in stages]}")

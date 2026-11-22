@@ -102,8 +102,10 @@ def test_invalid_exits_are_masked():
     assert float(p[:, 1:N_SLOTS - 1].sum()) < 1e-6        # empty slots 1-3 never chosen
 
 
-def test_ppo_update_and_warm_start_run(tmp_path):
-    """Trainer plumbing on a fake vector env: finite losses, the gate stays a probability, warm start runs."""
+@pytest.mark.parametrize("kw", [{}, {"gate": "event", "belief_bias": True}])
+def test_ppo_update_and_warm_start_run(tmp_path, kw):
+    """Trainer plumbing on a fake vector env: finite losses, the gate stays a probability, reliance probes are
+    logged, warm start runs."""
     from submarine.memory.trainer import PPOConfig, RecurrentPPO, warm_start
 
     class FakeVec:
@@ -126,11 +128,12 @@ def test_ppo_update_and_warm_start_run(tmp_path):
             d = np.full(4, self.t % 7 == 0)
             return self._obs(), self.rng.normal(size=4), d, [{"is_success": False} for _ in range(4)]
 
-    net = ExitMemoryNet(ExitMemoryConfig(variant="exit"))
+    net = ExitMemoryNet(ExitMemoryConfig(variant="exit", **kw))
     algo = RecurrentPPO(net, FakeVec(), PPOConfig(n_steps=8, epochs=2, minibatch_envs=2))
     algo.total_timesteps = 64
     st = algo.update(algo.collect())
     assert all(np.isfinite(v) for v in st.values()) and 0 < st["train/memory_gate"] < 1
+    assert st["memory/reliance_kl_all"] >= 0 and "memory/choice_change_fresh" in st
     n = 300
     demos = {"obs": np.concatenate([FakeVec()._obs() for _ in range(n // 4)]).astype(np.float32),
              "label": np.zeros(n, np.int64), "reward": np.zeros(n, np.float32),
@@ -139,15 +142,134 @@ def test_ppo_update_and_warm_start_run(tmp_path):
     assert res["agree"] > 0.5                             # label 0 is always valid: easy to clone
 
 
+EVENT = dict(variant="exit", gate="event", belief_bias=True, gate_init=0.0)
+
+
+@pytest.mark.parametrize("kw", [EVENT, dict(EVENT, variant="graph")])
+def test_event_gate_unroll_equals_step_by_step(kw):
+    th.manual_seed(0)
+    net = ExitMemoryNet(ExitMemoryConfig(**kw))
+    T, N = 8, 3
+    obs = th.randn(T, N, F) * 0.3
+    obs[:, :, OBS["prev_junction"]] = (th.rand(T, N) > 0.5).float()
+    obs[:, :, OBS["dead_end"]] = (th.rand(T, N) > 0.7).float()
+    starts = th.zeros(T, N)
+    starts[0] = 1.0
+    lg, _, _, _ = net.unroll(obs, net.initial_state(N), starts)
+    s, outs = net.initial_state(N), []
+    for t in range(T):
+        l1, _, _, s = net.step(obs[t], s, starts[t])
+        outs.append(l1)
+    assert th.allclose(lg, th.stack(outs), atol=1e-5)
+
+
+def test_event_gate_starts_uniform_and_traces_decay():
+    from submarine.memory.exitmem import EVENTS
+    net = ExitMemoryNet(ExitMemoryConfig(**EVENT))
+    base = ExitMemoryNet(ExitMemoryConfig(variant="exit"))
+    assert net.cfg.state_size == base.cfg.state_size + 3
+    s, st = net.initial_state(1), th.zeros(1)
+    _, _, _, s = net.step(make_obs(1, x=6.0, dead=True), s, st)
+    assert th.allclose(net.last_gate, th.full((1, N_SLOTS), 0.5))          # zero-initialised: sigmoid(0) everywhere
+    assert float(net.last_events[0, EVENTS.index("dead_end_recent")]) == 1.0
+    _, _, _, s = net.step(make_obs(1, x=3.0), s, st)
+    _, _, _, s = net.step(make_obs(1, x=0.0, junction=True, exits=((1, 0), (0, 1))), s, st)
+    assert abs(float(net.last_events[0, 0]) - 0.36) < 1e-5                # 0.6 ** 2: two decisions later
+    assert float(net.last_events[0, EVENTS.index("no_cue")]) == 1.0
+    assert float(net.last_events[0, EVENTS.index("junction")]) == 1.0
+
+
+def test_belief_bias_lowers_the_exit_believed_dead():
+    """The bias adds g * (w_dead * p_dead + w_taken * p_taken) to each exit's score, from the detached beliefs."""
+    th.manual_seed(0)
+    net = ExitMemoryNet(ExitMemoryConfig(**EVENT))
+    o = make_obs(1, junction=True, exits=((1, 0), (0, 1)))
+    s0, st = net.initial_state(1), th.zeros(1)
+    lg, _, aux, _ = net.step(o, s0, st)
+    with th.no_grad():
+        net.w_belief.zero_()
+    lg0, _, _, _ = net.step(o, s0, st)
+    p_dead, p_taken = th.sigmoid(aux["dead_known"]), th.sigmoid(aux["taken"])
+    want = 0.5 * (-2.0 * p_dead - 0.5 * p_taken)                         # gate 0.5, bias_init (-2, -0.5)
+    assert th.allclose((lg - lg0)[0, :2], want[0, :2], atol=1e-5)
+    # gradients reach the bias weights but not the aux heads through the bias
+    net.w_belief.data = th.tensor([-2.0, -0.5])
+    lg, _, _, _ = net.step(o, s0, st)
+    lg[0, 0].backward()
+    assert net.w_belief.grad is not None and net.aux_dead[0].weight.grad is None
+
+
+def test_ablated_step_drops_memory_and_keeps_the_state():
+    th.manual_seed(0)
+    net = ExitMemoryNet(ExitMemoryConfig(**EVENT))
+    s, st = net.initial_state(1), th.zeros(1)
+    _, _, _, s = net.step(make_obs(1, x=6.0, dead=True), s, st)
+    _, _, _, s = net.step(make_obs(1, x=3.0, prev=((0, 0), (0, 1))), s, st)
+    o = make_obs(1, x=0.0, junction=True, exits=((1, 0), (0, 1)))
+    lg, _, _, s1 = net.step(o, s, st)
+    la, _, _, s2 = net.step(o, s, st, ablate=True)
+    assert th.equal(s1, s2) and not th.allclose(lg, la)
+
+
+def test_event_config_round_trips_and_validates(tmp_path):
+    from submarine.memory.exitmem import load_model, save_model
+    net = ExitMemoryNet(ExitMemoryConfig(**dict(EVENT, bias_init=[-1.0, -0.2])))
+    save_model(net, tmp_path / "m.pt")
+    back = load_model(tmp_path / "m.pt")
+    assert back.cfg == net.cfg and back.cfg.bias_init == (-1.0, -0.2)
+    with pytest.raises(ValueError):
+        ExitMemoryConfig(variant="gru", gate="event")
+
+
 # ---------------------------------------------------------------- environment and scenarios
 
-@pytest.mark.parametrize("layout", ["decoy", "loops"])
+@pytest.mark.parametrize("layout", ["decoy", "loops", "rings", "hub"])
 def test_memory_scenarios_generate_solvable_caves(layout):
     from submarine.world import generate_cave
 
     for seed in range(5):
         c = generate_cave(seed, 0.5, layout=layout)
         assert np.isfinite(c.shortest_path_length)
+
+
+def test_rings_start_inside_with_islands_on_both_sides():
+    """rings: the start is on the inner ring (not at the cave's west end) and is NOT on the outer wall: flood-filling
+    the rock from the map border never reaches the rock on either side of the start (both are islands), which is
+    what defeats wall following."""
+    from scipy.ndimage import label
+
+    from submarine.world import generate_cave
+
+    for seed in range(4):
+        c = generate_cave(seed, 0.5, layout="rings")
+        assert c.start[0] > 15.0
+        lab, _ = label(c.rock)
+        border = set(np.unique(np.concatenate([lab[0], lab[-1], lab[:, 0], lab[:, -1]]))) - {0}
+        res = c.world.resolution
+        j, i = int(c.start[1] / res), int(c.start[0] / res)
+        side = []
+        for sgn in (1, -1):                               # walk sideways from the start until rock
+            dx, dy = -np.sin(c.start_heading) * sgn, np.cos(c.start_heading) * sgn
+            for r in np.arange(0.2, 6.0, 0.1):
+                jj, ii = int((c.start[1] + r * dy) / res), int((c.start[0] + r * dx) / res)
+                if c.rock[jj, ii]:
+                    side.append(lab[jj, ii])
+                    break
+        assert len(side) == 2 and not (set(side) & border), (seed, side, border)
+        assert side[0] != side[1]                         # the central rock and the C-shaped rock between rings
+
+
+def test_wall_followers_take_the_outermost_exit_and_turn_back_at_dead_ends():
+    from submarine.navigator import WallFollowerNavigator
+
+    o = np.zeros(OBS_DIM, np.float32)
+    s = o[OBS["slots"]].reshape(N_SLOTS, SLOT_DIM)
+    for k, b in enumerate([0.0, 1.2, -0.9]):              # straight, left, right (bearing, rad)
+        s[k, 0], s[k, 1], s[k, 2] = 1.0, np.cos(b), np.sin(b)
+    o[OBS["slots"]] = s.ravel()
+    assert WallFollowerNavigator("left").act(o) == 1 and WallFollowerNavigator("right").act(o) == 2
+    o[OBS["slots"]] = 0.0
+    assert WallFollowerNavigator("left").act(o) == N_SLOTS - 1
 
 
 def test_aux_labels_ride_in_the_observation_and_mark_revisits():

@@ -89,7 +89,10 @@ def _build_layout(rng, cfg: CaveConfig, world: WorldConfig, seed: int, attempt: 
 
     clearance = np.maximum(distance_transform_edt(free) * res - 0.5 * res, 0.0).astype(np.float32)
     feasible = clearance >= world.vehicle_radius
-    start_cell = _best_cell(feasible, clearance, xs, world.start_window)
+    if "start_xy" in stats:                                   # the layout places the start (e.g. inside rings)
+        start_cell = _cell_near(feasible, clearance, xs, ys, stats["start_xy"], radius=1.5)
+    else:
+        start_cell = _best_cell(feasible, clearance, xs, world.start_window)
     goal_cell = _best_cell(feasible, clearance, xs, world.goal_window)
     if start_cell is None or goal_cell is None:
         return None
@@ -101,7 +104,8 @@ def _build_layout(rng, cfg: CaveConfig, world: WorldConfig, seed: int, attempt: 
         rock=~free, clearance=clearance, feasible=feasible, geodesic=geodesic,
         centerline=np.full(nx, np.nan), width=np.zeros(nx),
         start=(float(xs[start_cell[1]]), float(ys[start_cell[0]])),
-        start_heading=heading_from_route(geodesic, start_cell, res),
+        start_heading=(float(stats["start_heading"]) if "start_heading" in stats      # (not along the route)
+                       else heading_from_route(geodesic, start_cell, res)),
         goal=(float(xs[goal_cell[1]]), float(ys[goal_cell[0]])), pillars=boulders, cracks=[],
     )
     cave.stats = stats
@@ -246,6 +250,16 @@ def _place_pillars(rng, cfg: CaveConfig, xs, yc, slope, width, rough_amp):
             continue
         pillars.append((float(px), float(py), float(r)))
     return pillars
+
+
+def _cell_near(feasible, clearance, xs, ys, xy, radius):
+    """Feasible cell with the largest clearance within `radius` m of xy, or None."""
+    X, Y = np.meshgrid(xs, ys)
+    near = feasible & (np.hypot(X - xy[0], Y - xy[1]) <= radius)
+    if not near.any():
+        return None
+    iy, ix = np.unravel_index(np.argmax(np.where(near, clearance, -1.0)), near.shape)
+    return int(iy), int(ix)
 
 
 def _best_cell(feasible, clearance, xs, window):

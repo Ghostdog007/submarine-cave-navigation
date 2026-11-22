@@ -25,6 +25,7 @@ import numpy as np
 
 LAYOUTS = ["tunnel", "maze", "branches", "crack", "breakdown"]
 MEMORY_LAYOUTS = ["maze", "decoy", "loops"]          # memory-v3: --layouts maze decoy loops
+MEMORY_NEEDED = ["rings", "hub"]                     # memory-v3.2: reactive rules (wall following, bearing) fail
 
 
 class ModelNavigator:
@@ -103,10 +104,12 @@ class MemNavNavigator:
 
 
 def make_navigator(name: str, wipe: bool = False):
-    from submarine.navigator import GreedyNavigator, OracleNavigator, RandomNavigator
+    from submarine.navigator import GreedyNavigator, OracleNavigator, RandomNavigator, WallFollowerNavigator
 
     if name == "greedy":
         return GreedyNavigator()
+    if name in ("wall-left", "wall-right"):
+        return WallFollowerNavigator(name.split("-")[1])
     if name == "oracle":
         return OracleNavigator()
     if name == "random":

@@ -12,8 +12,16 @@ Design (see docs/memory_v3.md for the literature behind each piece):
               ahead  "is there a dead end down this exit?": attention over entries with a bias for lying near
                      the ray from here along e_k (0-14 m), plus the rule-based strength.
             So the memory's answer is attached to the exit it is about, and the policy scores exits.
-  * gate    memory features enter the policy through a learned gate initialised nearly closed (GTrXL): the
-            policy starts like a memoryless one and opens the gate as memory pays off.
+  * gate    memory features enter the policy through a learned gate. "scalar" (v3): one number initialised nearly
+            closed (GTrXL). It turned out to be a redundant scale (the scorer's first layer can rescale the same
+            features), so it never moved. "event" (v3.2): one gate PER EXIT, computed from the events that make the
+            past relevant: a dead end hit recently, a recent turn-back, no new ground for a while (decaying traces
+            kept in the recurrent state), the model's own revisit belief, stored entries nearby, no goal cue, a
+            junction, and that exit's own dead-end / taken beliefs and rule strengths. It starts at sigmoid(gate_init)
+            everywhere (zero-initialised last layer) and learns WHEN memory matters.
+  * bias    (belief_bias) the exit scores get g_k * (w_dead * p_dead_k + w_taken * p_taken_k), w learnable, initialised
+            negative: from the first update, "I believe this exit is a dead end" lowers its score; PPO can weaken
+            it. The beliefs are detached, so the aux heads stay honest predictors.
   * aux     prediction heads trained from simulator ground truth (Nav A3C loop closure, UNREAL, MERLIN): loop
             closure, per-exit "taken before", per-exit "known dead end". They read the UNGATED memory, so the
             memory learns what to hold even while the gate is nearly closed.
@@ -39,6 +47,9 @@ from torch import nn
 from submarine.navigator.nav_env import AUX, AUX_DIM, N_SLOTS, OBS, OBS_DIM, POS_SCALE, SLOT_DIM
 
 VARIANTS = ("none", "gru", "graph", "exit")
+N_TRACES = 3                     # event traces kept in the state: dead end, turn back, stale (no new ground)
+EVENTS = ("dead_end_recent", "turned_back_recent", "stale", "revisit_belief", "stored_nearby", "no_cue",
+          "junction")            # per-decision trigger features of the event gate (+ 4 per exit, see _events)
 
 
 @dataclass(frozen=True)
@@ -53,10 +64,23 @@ class ExitMemoryConfig:
     sigma: float = 2.0           # m: "here" for the rule-based strengths
     ray_length: float = 14.0     # m: how far down an exit the "ahead" read looks for dead ends
     gate_init: float = -2.0      # sigmoid(-2) = 0.12
+    gate: str = "scalar"         # "scalar" (v3) | "event" (v3.2: per exit, from trigger events; store variants)
+    belief_bias: bool = False    # add w_dead * p_dead + w_taken * p_taken to the exit scores (v3.2)
+    bias_init: tuple = (-2.0, -0.5)   # (w_dead, w_taken) at the start
+    event_decay: float = 0.6     # per decision, for the dead-end / turn-back traces (0.6^3 = 0.2 after 3 decisions)
 
     def __post_init__(self):
         if self.variant not in VARIANTS:
             raise ValueError(f"variant must be one of {VARIANTS}")
+        if self.gate not in ("scalar", "event"):
+            raise ValueError("gate must be 'scalar' or 'event'")
+        if self.gate == "event" and not self.has_store:
+            raise ValueError("the event gate needs a store variant (graph, exit)")
+        object.__setattr__(self, "bias_init", tuple(self.bias_init))
+
+    @property
+    def event_state(self) -> int:
+        return N_TRACES if self.gate == "event" else 0
 
     @property
     def has_store(self) -> bool:
@@ -69,7 +93,7 @@ class ExitMemoryConfig:
     @property
     def state_size(self) -> int:
         return (self.gru if self.variant != "none" else 0) + (self.n_entries * self.entry_dim if self.has_store
-                                                               else 0)
+                                                               else 0) + self.event_state
 
 
 def _mlp(i, h, o):
@@ -100,7 +124,13 @@ class ExitMemoryNet(nn.Module):
             self.mem_dim, self.loop_dim = 3, 1                # taken strength, dead-ahead strength, both
         else:
             self.mem_dim, self.loop_dim = 0, 0
-        self.gate = nn.Parameter(th.tensor(float(c.gate_init))) if self.mem_dim else None
+        self.gate = nn.Parameter(th.tensor(float(c.gate_init))) if self.mem_dim and c.gate == "scalar" else None
+        if c.gate == "event":
+            self.gate_net = _mlp(len(EVENTS) + 4, 32, 1)
+            nn.init.zeros_(self.gate_net[2].weight)          # starts at sigmoid(gate_init) for every exit, event
+            nn.init.constant_(self.gate_net[2].bias, float(c.gate_init))
+        if c.belief_bias:
+            self.w_belief = nn.Parameter(th.tensor([float(v) for v in c.bias_init]))
         self.scorer = _mlp(SLOT_DIM + self.mem_dim + ctx, c.hidden, 1)
         self.value = _mlp(ctx + self.mem_dim, c.hidden, 1)
         # aux heads: every variant gets them (fair comparison); store variants answer from their memory features
@@ -117,13 +147,20 @@ class ExitMemoryNet(nn.Module):
         c = self.cfg
         G = c.gru if c.variant != "none" else 0
         h = state[:, :G]
-        E = state[:, G:].reshape(state.shape[0], c.n_entries, c.entry_dim) if c.has_store else None
+        KE = c.n_entries * c.entry_dim if c.has_store else 0
+        E = state[:, G:G + KE].reshape(state.shape[0], c.n_entries, c.entry_dim) if c.has_store else None
         return h, E
 
-    def _join(self, h, E):
+    def _traces(self, state):
+        c = self.cfg
+        return state[:, state.shape[1] - c.event_state:] if c.event_state else None
+
+    def _join(self, h, E, tr=None):
         parts = [h] if h.shape[1] else []
         if E is not None:
             parts.append(E.reshape(E.shape[0], -1))
+        if tr is not None:
+            parts.append(tr)
         return th.cat(parts, 1) if parts else h
 
     # ------------------------------------------------------------------ store writes
@@ -150,12 +187,15 @@ class ExitMemoryNet(nn.Module):
         return th.cat([E[:, :, :6 + M], age[..., None]], -1)
 
     # ------------------------------------------------------------------ one decision
-    def step(self, obs: th.Tensor, state: th.Tensor, start: th.Tensor):
-        """obs (N, >=OBS_DIM), state (N, S), start (N,) -> (logits (N, 5) masked, value (N,), aux dict, state)."""
+    def step(self, obs: th.Tensor, state: th.Tensor, start: th.Tensor, ablate: bool = False):
+        """obs (N, >=OBS_DIM), state (N, S), start (N,) -> (logits (N, 5) masked, value (N,), aux dict, state).
+        ablate: the same decision with the memory read zeroed and no belief bias (reliance probes: how much the
+        choice depends on memory). The returned state is the normal one."""
         c, M = self.cfg, self.cfg.memo
         x = obs[:, :OBS_DIM]
         state = state * (1.0 - start)[:, None]
         h, E = self._split(state)
+        tr = self._traces(state)
         z = self.enc(x)
         if self.core is not None:
             h = self.core(z, h)
@@ -166,30 +206,66 @@ class ExitMemoryNet(nn.Module):
         pos = th.stack([x[:, OBS["x"]], x[:, OBS["y"]]], 1) * POS_SCALE              # metres, nav frame
 
         if c.has_store:
-            memo = self.write_memo(ctx) if c.variant == "exit" else th.zeros(x.shape[0], M)
+            memo = self.write_memo(ctx) if c.variant == "exit" else x.new_zeros(x.shape[0], M)
             prev = th.stack([x[:, OBS["prev_x"]], x[:, OBS["prev_y"]]], 1) * POS_SCALE
             prev_h = th.stack([x[:, OBS["prev_cos"]], x[:, OBS["prev_sin"]]], 1)
             E = self._write(E, (x[:, OBS["prev_junction"]] > 0.5).to(x.dtype), prev, prev_h, memo, 0.0)
             here_h = th.stack([x[:, OBS["cos_psi"]], x[:, OBS["sin_psi"]]], 1)
             E = self._write(E, (x[:, OBS["dead_end"]] > 0.5).to(x.dtype), pos, here_h, memo, 1.0)
             mem, loop_feat = self._read(E, ctx, slots, pos)
-            g = th.sigmoid(self.gate)
-            gated = g * mem
         else:
-            mem = gated = th.zeros(x.shape[0], N_SLOTS, 0)
-            loop_feat = th.zeros(x.shape[0], 0)
+            mem = x.new_zeros(x.shape[0], N_SLOTS, 0)
+            loop_feat = x.new_zeros(x.shape[0], 0)
 
         ctx_k = ctx[:, None].expand(-1, N_SLOTS, -1)
+        aux_in = th.cat([mem, slots, ctx_k], -1)                  # aux heads read the UNGATED memory
+        aux = {"taken": self.aux_taken(aux_in).squeeze(-1), "dead_known": self.aux_dead(aux_in).squeeze(-1),
+               "loop": self.aux_loop(th.cat([ctx, loop_feat], 1)).squeeze(-1)}
+        p_dead, p_taken = th.sigmoid(aux["dead_known"]).detach(), th.sigmoid(aux["taken"]).detach()
+        g = None
+        if c.gate == "event":
+            ev, tr = self._events(x, tr, mem, loop_feat, aux, p_dead, p_taken)
+            g = th.sigmoid(self.gate_net(ev))                     # (N, 5, 1): per exit
+        elif self.gate is not None:
+            g = th.sigmoid(self.gate)
+        gated = mem if g is None else g * mem
+        if ablate:
+            gated = th.zeros_like(gated)
         logits = self.scorer(th.cat([slots, gated, ctx_k], -1)).squeeze(-1)
+        if c.belief_bias and not ablate:
+            gk = 1.0 if c.gate != "event" else g[..., 0]
+            logits = logits + gk * (self.w_belief[0] * p_dead + self.w_belief[1] * p_taken)
         logits = th.where(valid, logits, th.full_like(logits, -1e8))
         vmask = valid.to(x.dtype)[..., None]
         pooled = (gated * vmask).sum(1) / vmask.sum(1).clamp(min=1.0)
         value = self.value(th.cat([ctx, pooled], 1)).squeeze(-1)
-        aux_in = th.cat([mem, slots, ctx_k], -1)
-        aux = {"taken": self.aux_taken(aux_in).squeeze(-1), "dead_known": self.aux_dead(aux_in).squeeze(-1),
-               "loop": self.aux_loop(th.cat([ctx, loop_feat], 1)).squeeze(-1)}
         self.last_reads = (mem.detach(), valid.detach())          # for replays / probes (T = 1 calls)
-        return logits, value, aux, self._join(h, E)
+        self.last_gate = None if c.gate != "event" else g[..., 0].detach()       # (N, 5)
+        return logits, value, aux, self._join(h, E, tr)
+
+    def _events(self, x, tr, mem, loop_feat, aux, p_dead, p_taken):
+        """Trigger features of the event gate -> ((N, 5, len(EVENTS) + 4), updated traces (N, 3)).
+        Traces: dead end / turn back are 1 at the decision they happen and decay by event_decay per decision;
+        stale is an average of "stored entries here" (high = going over old ground)."""
+        c, d = self.cfg, self.cfg.event_decay
+        near = loop_feat[:, -1:].clamp(0.0, 1.0)                  # rule: how much is stored right here
+        t_dead = th.maximum(x[:, OBS["dead_end"]:OBS["dead_end"] + 1], d * tr[:, 0:1])
+        t_back = th.maximum(x[:, OBS["prev_back"]:OBS["prev_back"] + 1], d * tr[:, 1:2])
+        t_stale = 0.7 * tr[:, 2:3] + 0.3 * near
+        tr = th.cat([t_dead, t_back, t_stale], 1)
+        no_cue = (x[:, OBS["goal"]].abs().sum(1, keepdim=True) == 0).to(x.dtype)
+        glob = th.cat([tr, th.sigmoid(aux["loop"]).detach()[:, None], near, no_cue,
+                       x[:, OBS["junction"]:OBS["junction"] + 1]], 1)
+        self.last_events = glob.detach()
+        st = self._strengths(mem)                                 # (N, 5, 2): taken / dead-ahead rule strengths
+        per = th.cat([p_dead[..., None], p_taken[..., None], st.clamp(max=3.0) / 3.0], -1)
+        return th.cat([glob[:, None].expand(-1, N_SLOTS, -1), per], -1), tr
+
+    def _strengths(self, mem):
+        if self.cfg.variant == "graph":
+            return mem[..., :2]
+        M = self.cfg.memo
+        return th.stack([mem[..., M + 2], mem[..., -1]], -1)
 
     def _read(self, E, ctx, slots, pos):
         c, M = self.cfg, self.cfg.memo
@@ -258,7 +334,7 @@ class ExitMemoryNet(nn.Module):
         _, E = self._split(state[:1])
         M = self.cfg.memo
         out = []
-        for k, row in enumerate(E[0]):
+        for k, row in enumerate(E[0].detach()):
             if row[5 + M] > 0.5:
                 out.append({"slot": k, "pos": (float(row[0]), float(row[1])),
                             "heading": float(th.atan2(row[3], row[2])), "dead_end": bool(row[4 + M] > 0.5),
@@ -270,10 +346,7 @@ class ExitMemoryNet(nn.Module):
         if not self.cfg.has_store or getattr(self, "last_reads", None) is None:
             return None
         mem, _ = self.last_reads
-        if self.cfg.variant == "graph":
-            return mem[..., :2]
-        M = self.cfg.memo
-        return th.stack([mem[..., M + 2], mem[..., -1]], -1)
+        return self._strengths(mem)
 
     def config_dict(self) -> dict:
         return asdict(self.cfg)
@@ -291,7 +364,10 @@ def save_model(net: ExitMemoryNet, path, extra: dict | None = None):
 
 def load_model(path) -> ExitMemoryNet:
     ck = th.load(path, map_location="cpu", weights_only=False)
-    net = ExitMemoryNet(ExitMemoryConfig(**ck["config"]))
+    cfg = dict(ck["config"])
+    if "bias_init" in cfg:
+        cfg["bias_init"] = tuple(cfg["bias_init"])
+    net = ExitMemoryNet(ExitMemoryConfig(**cfg))
     net.load_state_dict(ck["state_dict"])
     net.eval()
     return net
