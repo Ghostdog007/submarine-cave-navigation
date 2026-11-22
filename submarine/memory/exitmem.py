@@ -275,8 +275,8 @@ class ExitMemoryNet(nn.Module):
         e = slots[:, :, 3:5]                                                  # exit direction, nav frame (N,5,2)
         rel = P[:, None] - pos[:, None, None]                                 # (N,1,K,2) -> broadcast (N,5,K,2)
         d2 = (rel ** 2).sum(-1)                                               # (N,1,K)
-        hsim = (e[:, :, None] * H[:, None]).sum(-1)                           # (N,5,K) direction match
-        t = (rel * e[:, :, None]).sum(-1)                                     # along the exit's ray
+        hsim = th.einsum("nsd,nkd->nsk", e, H)                                # (N,5,K) direction match
+        t = th.einsum("nkd,nsd->nsk", rel[:, 0], e)                           # along the exit's ray
         perp2 = (d2 - t ** 2).clamp(min=0.0)
         on_ray = (t > 0.5) & (t < c.ray_length)
         s2 = 2 * c.sigma ** 2
@@ -294,22 +294,22 @@ class ExitMemoryNet(nn.Module):
         ctx_e = th.cat([ctx[:, None].expand(-1, N_SLOTS, -1), e], -1)
         neg = th.full_like(hsim, -1e9)
         bl, ba = self.b_local, self.b_ahead
-        lg = (self.q_local(ctx_e)[:, :, None] * memo[:, None]).sum(-1) / math.sqrt(M) \
+        lg = th.einsum("nsm,nkm->nsk", self.q_local(ctx_e), memo) / math.sqrt(M) \
             - nn.functional.softplus(bl[0]) * d2 / s2 + bl[1] * hsim + bl[2] * D[:, None]
         lg = th.where(used[:, None], lg, neg)
         att = th.softmax(lg, -1) * used.any(-1, keepdim=True)[:, None]
-        r_local = th.cat([(att[..., None] * memo[:, None]).sum(2), (att * D[:, None]).sum(-1, keepdim=True),
+        r_local = th.cat([th.bmm(att, memo), (att * D[:, None]).sum(-1, keepdim=True),
                           (att * hsim).sum(-1, keepdim=True)], -1)
-        la = (self.q_ahead(ctx_e)[:, :, None] * memo[:, None]).sum(-1) / math.sqrt(M) \
+        la = th.einsum("nsm,nkm->nsk", self.q_ahead(ctx_e), memo) / math.sqrt(M) \
             - nn.functional.softplus(ba[0]) * perp2 / s2 + ba[1] * D[:, None]
         la = th.where(used[:, None] & on_ray, la, neg)
         att_a = th.softmax(la, -1) * (used[:, None] & on_ray).any(-1, keepdim=True)
-        r_ahead = th.cat([(att_a[..., None] * memo[:, None]).sum(2), (att_a * D[:, None]).sum(-1, keepdim=True)], -1)
+        r_ahead = th.cat([th.bmm(att_a, memo), (att_a * D[:, None]).sum(-1, keepdim=True)], -1)
         mem = th.cat([r_local, taken_s[..., None], r_ahead, ahead_s[..., None]], -1)
-        lq = (self.q_loop(ctx)[:, None] * memo).sum(-1) / math.sqrt(M) - d2[:, 0] / s2
+        lq = th.einsum("nm,nkm->nk", self.q_loop(ctx), memo) / math.sqrt(M) - d2[:, 0] / s2
         lq = th.where(used, lq, th.full_like(lq, -1e9))
         att_l = th.softmax(lq, -1) * used.any(-1, keepdim=True)
-        loop_feat = th.cat([(att_l[..., None] * memo).sum(1), loop_s.clamp(max=3.0)], 1)
+        loop_feat = th.cat([th.einsum("nk,nkm->nm", att_l, memo), loop_s.clamp(max=3.0)], 1)
         self.last_weights = {"local": att.detach(), "ahead": att_a.detach()}   # replays: attention per exit, entry
         return mem, loop_feat
 

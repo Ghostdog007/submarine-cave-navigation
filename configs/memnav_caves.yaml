@@ -53,9 +53,10 @@
 # Also: labels fixed (a departure counts as "taken" only after the sub has come back; a dead end belongs to the
 # departure that led straight to it), memory gate starts at 0.5 instead of 0.12.
 seed: 0
+threads: 1                        # learner torch threads: tiny ops, threading only adds overhead (measured)
 run_prefix: memnav_c
-n_envs: 30
-envs_per_worker: 6
+n_envs: 60                        # speed (v3.3): 2x the envs per rollout; a bigger batch costs the learner ~nothing
+envs_per_worker: 4                # -> 15 simulator workers (was 5)
 model:
   d_model: 64
   gru: 64
@@ -74,7 +75,7 @@ model:
 ppo:
   n_steps: 64
   epochs: 4
-  minibatch_envs: 8
+  minibatch_envs: 15              # 4 minibatches of 15 (was minibatches of 8 out of 30 envs): same unrolls per update, 2x the data
   lr: 3.0e-4
   gamma: 0.99
   lam: 0.95
@@ -91,10 +92,10 @@ bc:
   decisions: 60000
   noise: 0.1
   junction_noise: 0.35
-  epochs: 10
-  lanes: 8
+  epochs: 12
+  lanes: 32                       # was 8: 4x fewer sequential steps per epoch (warm start ~3-4x faster)
   seq_len: 64
-  lr: 1.0e-3
+  lr: 2.0e-3                      # was 1e-3: fewer, larger warm-start steps
   vf_coef: 0.05
   aux_weight: 0.5
 

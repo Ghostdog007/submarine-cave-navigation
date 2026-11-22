@@ -37,7 +37,7 @@ def main():
     p.add_argument("--scale", type=float, default=1.0, help="multiply every stage budget (smoke tests)")
     p.add_argument("--name", default=None)
     p.add_argument("--workers", type=int, default=None, help="worker processes (envs stay the same)")
-    p.add_argument("--threads", type=int, default=2, help="torch threads in the learner")
+    p.add_argument("--threads", type=int, default=None, help="torch threads in the learner (default: config threads, else 2)")
     p.add_argument("--no-warm-start", action="store_true")
     p.add_argument("--demos", default=None, help="override bc.demos")
     p.add_argument("--init", default=None, help="start from these weights (e.g. a saved b0_warm_start.pt) and "
@@ -65,7 +65,7 @@ def main():
     from submarine.memory.exitmem import ExitMemoryConfig, ExitMemoryNet, save_model
     from submarine.memory.trainer import PPOConfig, RecurrentPPO, warm_start
 
-    th.set_num_threads(args.threads)
+    th.set_num_threads(args.threads or int(C.get("threads", 2)))
     th.manual_seed(int(C.get("seed", 0)))
     base, stages = C["base"], C["stages"]
     if not Path(base["driver_actor"]).exists():

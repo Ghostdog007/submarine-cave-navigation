@@ -22,7 +22,8 @@ controllers and a map-aware oracle on held-out caves.
 > | M v3.1: reward that prices forgetting | trained and tested: **no gain for memory** (exit 70.7%, no memory 72.0%); it made both explore untried exits more |
 > | M v3.2: event-triggered per-exit memory gate + belief bias | trained and tested: **memory is used selectively** (gate 0.83 at known dead ends vs 0.40 at fresh junctions) and known dead ends are avoided most of any model (61–70%), but success did not rise (66.7% standard, 48–55% rings / hub) |
 > | M memory caves (`rings`, `hub`) + wall-follower baselines | built: the old caves turned out **solvable without memory**; on the new ones every reactive rule fails (greedy 5%, wall following 37–42%, oracle 100%) and v3 exit memory re-enters dead ends ~25% less than no memory. 148/148 tests pass |
-> | **M v3.3: v3.2 trained on the memory caves (+ a memoryless control)** | **ready, paused**: training is being sped up first (profiling showed the memory model's PPO update, not the simulator, takes most of the time) |
+> | **M v3.3: v3.2 trained on the memory caves (+ a memoryless control)** | **training** (started 22 Nov ~23:55), with the speed-ups below |
+> | Training speed-ups | memory reads as batched matmuls (same outputs, learner ~2× faster); 60 envs on 15 workers, minibatches of 15, warm start in 32 lanes, 1 learner thread. Measured: warm start ~3–4× faster, PPO 1–1.9× (stage 3 is now limited by the cave simulation). The GPU was measured *slower* for this tiny step-by-step model |
 
 ![game-style renderer](docs/figures/game_renderer_drive.png)
 
