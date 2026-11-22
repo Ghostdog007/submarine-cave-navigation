@@ -4,8 +4,8 @@
 # Steps are decisions (~1.5-2 s of driving each). 240k decisions per variant; with four variants in parallel on
 # 24 cores (~5 worker processes each) expect ~25-35 decisions/s per run, i.e. ~2-2.5 h.
 seed: 0
-n_envs: 32
-envs_per_worker: 6                # ~5-6 worker processes per run: four runs fit 24 cores
+n_envs: 30                        # must be a multiple of envs_per_worker (32 with 6 crashed at the PPO start)
+envs_per_worker: 6                # 5 worker processes per run: four runs fit 24 cores
 model:                            # ExitMemoryConfig (submarine/memory/exitmem.py); variant comes from the CLI
   d_model: 64
   gru: 64

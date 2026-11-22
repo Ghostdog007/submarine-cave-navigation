@@ -40,6 +40,8 @@ def main():
     p.add_argument("--threads", type=int, default=2, help="torch threads in the learner")
     p.add_argument("--no-warm-start", action="store_true")
     p.add_argument("--demos", default=None, help="override bc.demos")
+    p.add_argument("--init", default=None, help="start from these weights (e.g. a saved b0_warm_start.pt) and "
+                                               "skip the warm start")
     args = p.parse_args()
 
     C = yaml.safe_load(open(args.config, encoding="utf-8"))
@@ -70,6 +72,8 @@ def main():
         raise FileNotFoundError(f"driver {base['driver_actor']} not found (copy runs/driver/driver.npz)")
     n_envs = int(C["n_envs"])
     k = n_envs // args.workers if args.workers else int(C.get("envs_per_worker", 4))
+    if n_envs % k:                                            # fail now, not after a 10-minute warm start
+        raise ValueError(f"n_envs ({n_envs}) must be a multiple of envs per worker ({k})")
     net = ExitMemoryNet(ExitMemoryConfig(variant=args.variant, **C.get("model", {})))
     n_params = sum(p_.numel() for p_ in net.parameters())
     log(f"variant={args.variant}: {n_params} parameters, state {net.cfg.state_size} floats/env, {n_envs} envs on "
@@ -78,7 +82,13 @@ def main():
     bc = dict(C.get("bc", {}))
     if args.demos:
         bc["demos"] = args.demos
-    if bc.get("demos") and not args.no_warm_start:
+    if args.init:
+        ck = th.load(args.init, map_location="cpu", weights_only=False)
+        if ck["config"]["variant"] != args.variant:
+            raise ValueError(f"{args.init} is a {ck['config']['variant']} model, not {args.variant}")
+        net.load_state_dict(ck["state_dict"])
+        log(f"initialised from {args.init} (warm start skipped)")
+    elif bc.get("demos") and not args.no_warm_start:
         if not Path(bc["demos"]).exists():
             raise FileNotFoundError(f"{bc['demos']} not found: python -m scripts.collect_nav_demos "
                                     f"--config {args.config} --out {bc['demos']}")
