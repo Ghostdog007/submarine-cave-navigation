@@ -48,9 +48,15 @@ class PPOConfig:
     target_kl: float = 0.03
 
 
-def masked_bce(logit, target, mask):
-    loss = nn.functional.binary_cross_entropy_with_logits(logit, target, reduction="none")
+def masked_bce(logit, target, mask, pos_weight: float = 1.0):
+    loss = nn.functional.binary_cross_entropy_with_logits(
+        logit, target, reduction="none", pos_weight=th.tensor(pos_weight) if pos_weight != 1.0 else None)
     return (loss * mask).sum() / mask.sum().clamp(min=1.0)
+
+
+# "known dead end" is true at ~1% of decisions (60k-decision demos): rare events are up-weighted, as UNREAL
+# rebalances its rare rewarding histories, so the head does not learn to always answer "no"
+DEAD_KNOWN_POS_WEIGHT = 10.0
 
 
 def aux_loss(aux: dict, obs: th.Tensor, valid: th.Tensor, mask_t: th.Tensor | None = None):
@@ -60,7 +66,7 @@ def aux_loss(aux: dict, obs: th.Tensor, valid: th.Tensor, mask_t: th.Tensor | No
     if mask_t is not None:
         m = m * mask_t[..., None]
     lt = masked_bce(aux["taken"], taken, m)
-    ld = masked_bce(aux["dead_known"], dead, m)
+    ld = masked_bce(aux["dead_known"], dead, m, DEAD_KNOWN_POS_WEIGHT)
     ml = th.ones_like(loop) if mask_t is None else mask_t
     ll = masked_bce(aux["loop"], loop, ml)
     with th.no_grad():
@@ -298,8 +304,8 @@ def warm_start(net: ExitMemoryNet, demos: dict, epochs: int = 6, lanes: int = 32
             state = state.detach()
             with th.no_grad():
                 tot["agree"] += float(((logits.argmax(-1) == y).float() * m).sum())
-            tot["nll"] += float(nll) * float(m.sum())
-            tot["aux"] += float(la) * float(m.sum())
+            tot["nll"] += float(nll.detach()) * float(m.sum())
+            tot["aux"] += float(la.detach()) * float(m.sum())
             tot["n"] += float(m.sum())
         return {k: v / max(tot["n"], 1) for k, v in tot.items() if k != "n"}
 

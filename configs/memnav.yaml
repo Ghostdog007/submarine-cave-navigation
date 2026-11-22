@@ -37,8 +37,8 @@ bc:                               # warm start: imitate the map-aware teacher ov
   decisions: 60000
   noise: 0.1                      # random exit away from junctions
   junction_noise: 0.35            # random exit at junctions: wrong branches, dead ends, returns
-  epochs: 6
-  lanes: 32
+  epochs: 10                      # ~110 updates per epoch on 60k decisions
+  lanes: 8                        # 8 x 64 = 512 decisions per update (32 lanes gave only ~29 updates per epoch)
   seq_len: 64
   lr: 1.0e-3
   vf_coef: 0.05

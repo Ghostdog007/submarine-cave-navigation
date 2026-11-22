@@ -85,7 +85,7 @@ Parameters 32k / 71k / 72k / 87k. Recurrent state 0 / 64 / 800 / 800 floats per 
 | Phase | What | Budget |
 |---|---|---|
 | Demos | Map-aware teacher (`OracleNavigator`). 35% random exits **at junctions** (wrong branches → dead ends → returns), 10% elsewhere | 60k decisions, ~10 min |
-| Warm start | Behaviour cloning over whole episodes (32 lanes, windows of 64, state carried) + value + aux losses, 6 epochs | ~10–20 min per variant |
+| Warm start | Behaviour cloning over whole episodes (8 lanes, windows of 64, state carried) + value + aux losses, 10 epochs (~1,100 updates; the smoke run showed 32 lanes gave too few updates) | ~10–20 min per variant |
 | m1_core | tunnel, branches, maze, decoy; d 0–0.5; goal cue always | 60k decisions |
 | m2_memory | maze ×2, decoy ×2, loops ×2, branches, breakdown, crack, tunnel; d 0–0.75; 30% blind | 100k |
 | m3_full | same mix; d 0–1; currents up to 0.2 m/s; 30% blind | 80k |
