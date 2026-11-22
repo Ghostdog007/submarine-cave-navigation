@@ -127,10 +127,23 @@ class ExitMemoryTrace:
     write events logged as STORED / UPDATED (merged at the same place) / REPLACED (oldest evicted), and checked
     against the observation's write flags (an entry change without a flag counts as unexplained: must stay 0)."""
 
+    ARCH = {"none": ("MLP, NO MEMORY", (200, 200, 200),
+                     "beliefs come from the current sonar view only: it cannot remember"),
+            "gru": ("GRU MEMORY", (190, 150, 255),
+                    "remembers in 64 hidden units, no map: markers show what its heads believe"),
+            "graph": ("JUNCTION GRAPH STORE", (120, 230, 140),
+                      "32-entry store, fixed geometric reads: lines show the entries each rule uses"),
+            "exit": ("EXIT MEMORY", (255, 170, 80),
+                     "32-entry store, learned attention reads: lines show what it attends to")}
+
     def __init__(self, nav, env):
         self.nav, self.env = nav, env
         m = getattr(nav, "model", None)
-        self.model = m if getattr(getattr(m, "cfg", None), "has_store", False) else None
+        self.net = m                                          # any memory-v3 navigator (beliefs, architecture)
+        self.variant = m.cfg.variant
+        self.model = m if m.cfg.has_store else None           # store variants: decoded entries
+        self.beliefs = None                                   # {taken (5,), dead_known (5,), loop} last decision
+        self.revisit = False
         self.log: list[tuple[float, str]] = []
         self.markers: list[dict] = []
         self.recall: list[dict] = []
@@ -145,6 +158,68 @@ class ExitMemoryTrace:
     def to_world(self, nx, ny):
         x0, y0, p0 = self.env.base._nav_origin
         return (x0 + nx * np.cos(p0) - ny * np.sin(p0), y0 + nx * np.sin(p0) + ny * np.cos(p0))
+
+    @property
+    def gate(self):
+        g = getattr(self.net, "gate", None)
+        return None if g is None else float(1 / (1 + np.exp(-float(g.detach()))))
+
+    def hud(self) -> list[str]:
+        name, _, what = self.ARCH[self.variant]
+        g = self.gate
+        lines = [f"ARCHITECTURE: {name}" + (f"   memory gate {g:.2f}" if g is not None else "") + f"   ({what})"]
+        parts = []
+        if self.model is not None:
+            n_j = sum(not m["dead_end"] for m in self.markers)
+            n_d = sum(m["dead_end"] for m in self.markers)
+            parts.append(f"store: {n_j} junction departures, {n_d} dead ends")
+        b = self.beliefs
+        if b is not None:
+            parts.append(f"revisit belief {100 * b['loop']:.0f}%" + ("  << RECOGNISES THIS PLACE" if self.revisit
+                                                                    else ""))
+        if parts:
+            lines.append("   |   ".join(parts))
+        return lines
+
+    def legend(self) -> list[str]:
+        out = []
+        if self.model is not None:
+            out += ["ring #n   left a junction (stored)", "red X #n  dead end (stored)",
+                    "line      entry recalled for this choice", "yellow pulse  strongest recall"]
+        out += ["DEAD? n%  exit believed a known dead end", "BEEN n%   exit believed already taken",
+                "orange ring  believes it is revisiting"]
+        return out
+
+    def decide(self, obs_in, choice: int, t: float):
+        """After the navigator acted: beliefs (aux heads), recall lines (store reads), decision events."""
+        from submarine.navigator import N_SLOTS, OBS, SLOT_DIM
+
+        aux = getattr(self.nav, "last_aux", None)
+        if aux is None:
+            return
+        self.beliefs = {"taken": aux["taken"], "dead_known": aux["dead_known"], "loop": float(aux["loop"])}
+        rev = self.beliefs["loop"] > 0.5
+        if rev and not self.revisit:
+            self.log.append((t, f"RECOGNISED a place it has been ({100 * self.beliefs['loop']:.0f}%)"))
+        self.revisit = rev
+        slots = obs_in[OBS["slots"]].reshape(N_SLOTS, SLOT_DIM)
+        valid = [k for k in range(N_SLOTS - 1) if slots[k, 0] > 0.5]
+        if len(valid) >= 2:                                    # a real choice: report what memory steered
+            dk = self.beliefs["dead_known"]
+            for k in valid:
+                if dk[k] > 0.5 and k != choice:
+                    self.log.append((t, f"AVOIDED {SLOT_NAMES[k]}: believes dead end ({100 * dk[k]:.0f}%)"))
+            if choice in valid and dk[choice] > 0.5:
+                self.log.append((t, f"ENTERED {SLOT_NAMES[choice]} despite dead-end belief "
+                                    f"({100 * dk[choice]:.0f}%)"))
+        self.recall = []
+        w = getattr(self.model, "last_weights", None) if self.model is not None else None
+        if w is not None:
+            wl, wa = w["local"][0, choice].numpy(), w["ahead"][0, choice].numpy()
+            for m in self.markers:
+                wk = float(min(1.0, max(wl[m["slot"]], wa[m["slot"]])))
+                if wk > 0.05:
+                    self.recall.append({"xy": m["xy"], "dead_end": m["dead_end"], "w": wk})
 
     def after_decision(self, obs_in, t: float):
         if not self.active:
@@ -217,13 +292,42 @@ def record_nav_replay(nav, cfg, layout: str, cave_seed: int, difficulty: float, 
     if hasattr(nav, "attach"):
         nav.attach(env)
     nav.reset()
-    trace = ExitMemoryTrace(nav, env) if hasattr(getattr(nav, "model", None), "entries") else MemoryTrace(nav, env)
-    viewer = Viewer(env.base.cave, scale=None, style="game", theme=theme, camera="follow")
+    v3 = hasattr(getattr(nav, "model", None), "entries")
+    trace = ExitMemoryTrace(nav, env) if v3 else MemoryTrace(nav, env)
+    c = env.cfg                                               # memory-pricing reward (memory-v3.1) shown live
+    rw_on = c.progress == "record" or c.explore_bonus > 0 or any(
+        x > 0 for x in (c.repeat_dead_penalty, c.repeat_taken_penalty, c.dead_end_revisit_penalty, c.dither_penalty))
+    viewer = Viewer(env.base.cave, scale=None, style="game", theme=theme, camera="follow",
+                    hud_h=82 if rw_on else 64)                # a 4th status line for the reward
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     writer = imageio.get_writer(out_path, fps=speed / env.dt, codec="libx264", quality=8, macro_block_size=1,
                                 ffmpeg_log_level="error")
     state = {"exits": [], "probs": None, "choice": None, "t_dec": -1.0, "done": False, "outcome": ""}
+    rw = {"ret": 0.0, "pen": 0.0, "n_dead": 0, "n_taken": 0, "n_rev": 0, "n_dither": 0, "explore": 0.0,
+          "t_explore": -9.0}
+
+    def reward_events(t):
+        """Live from the env's episode counters: penalties are set when the decision is taken, the exploration
+        bonus as each new cell is entered."""
+        ep = env._ep
+        k = state["choice"]
+        if ep["repeat_dead"] > rw["n_dead"]:
+            trace.log.append((t, f"PENALTY -{c.repeat_dead_penalty:g}: took {SLOT_NAMES[k]}, an exit that "
+                                 "already led to a dead end"))
+        if ep["repeat_taken"] > rw["n_taken"]:
+            trace.log.append((t, f"PENALTY -{c.repeat_taken_penalty:g}: re-took {SLOT_NAMES[k]} while an exit "
+                                 "here is untried"))
+        if ep["dithers"] > rw["n_dither"]:
+            trace.log.append((t, f"PENALTY -{c.dither_penalty:g}: turned back again (U-turn loop, no junction "
+                                 "in between)"))
+        if ep["dead_end_revisits"] > rw["n_rev"] and c.dead_end_revisit_penalty:
+            trace.log.append((t, f"PENALTY -{c.dead_end_revisit_penalty:g}: back at a dead end it already "
+                                 "reached and left"))
+        if ep["explore"] > rw["explore"]:
+            rw["t_explore"] = t
+        rw.update(n_dead=ep["repeat_dead"], n_taken=ep["repeat_taken"], n_rev=ep["dead_end_revisits"],
+                  n_dither=ep["dithers"], pen=ep["repeat_penalty"], explore=ep["explore"])
 
     def frame(info):
         e = env.base
@@ -233,48 +337,103 @@ def record_nav_replay(nav, cfg, layout: str, cave_seed: int, difficulty: float, 
                f"to goal {info['geodesic']:5.1f} m   energy {info['energy_j'] / 1000:5.1f} kJ   "
                f"filter {'ON' if env.pilot.last_info.get('overridden') else 'off'}"
                if hasattr(env.pilot, "last_info") else f"t {t:5.1f} s"]
-        if trace.active:
+        if v3:
+            hud += trace.hud()
+        elif trace.active:
             n_j = sum(not m["dead_end"] for m in trace.markers)
             n_d = sum(m["dead_end"] for m in trace.markers)
             hud.append(f"junction memory: {n_j} junctions, {n_d} dead ends stored")
+        if rw_on:
+            reward_events(t)
+            hud.append(f"reward so far {rw['ret']:+6.1f}   progress: {c.progress}   "
+                       f"repeat penalties {-rw['pen']:+.1f} (dead-end exit {rw['n_dead']}x, re-taken {rw['n_taken']}x, "
+                       f"dead-end revisit {rw['n_rev']}x, U-turn loop {rw['n_dither']}x)   exploration bonus {rw['explore']:+.1f}"
+                       + ("" if c.explore_bonus > 0 and not (c.explore_without_cue_only and env._cue)
+                          else " (off: goal cue shown)" if c.explore_bonus > 0 else ""))
         banner = state["outcome"].upper() if state["done"] else None
         viewer.draw(e.sim, e._last, e._trail, hud, banner, speeds=None, action=e._a_prev,
                     progress=1 - info["geodesic"] / max(e.cave.shortest_path_length, 1e-6),
                     label=f"{nav.name}   {layout}  d={difficulty:.2f}  cave {cave_seed}",
                     memory=trace.markers if trace.active else None, recall=trace.recall)
-        cv = viewer.canvas
+        cv = viewer.screen                                   # drawn after viewer.draw composed the frame
+
+        def sp(x, y):                                        # world -> screen pixels (follow camera)
+            px, py = viewer.to_px(x, y)
+            return px - viewer.view.x, py - viewer.view.y
         # exits at the last decision (shown for 1.5 s), probability per exit, chosen one highlighted
         if 0 <= t - state["t_dec"] < 1.5 and state["exits"]:
-            o = viewer.to_px(s.x, s.y)
+            o = sp(s.x, s.y)
             font = viewer.small
             for k, (b, depth) in state["exits"]:
                 h = s.psi + b
                 L = min(depth, 4.0)
-                p = viewer.to_px(s.x + L * np.cos(h), s.y + L * np.sin(h))
+                p = sp(s.x + L * np.cos(h), s.y + L * np.sin(h))
                 chosen = k == state["choice"]
                 col = (255, 220, 80) if chosen else (180, 200, 220)
                 pygame.draw.line(cv, col, o, p, 4 if chosen else 2)
                 lab = SLOT_NAMES[k] + (f" {100 * state['probs'][k]:.0f}%" if state["probs"] is not None else "")
-                em = getattr(trace, "exit_memory", None)          # memory-v3: what memory says about this exit
+                em = getattr(trace, "exit_memory", None)          # store variants: what the store says (rules)
                 if em is not None:
-                    lab += (" [known dead end]" if em[k, 1] > 0.5 else "") + (" [taken]" if em[k, 0] > 0.5 else "")
+                    lab += ((" [store: dead end]" if em[k, 1] > 0.5 else "")
+                            + (" [store: taken]" if em[k, 0] > 0.5 else ""))
+                b = getattr(trace, "beliefs", None)                # every v3 variant: what its heads believe
+                if b is not None:
+                    acol = ExitMemoryTrace.ARCH[trace.variant][1]
+                    if b["dead_known"][k] > 0.5:                   # red X on the exit, ringed in the arch colour
+                        rr = 7
+                        pygame.draw.line(cv, (255, 80, 80), (p[0] - rr, p[1] - rr), (p[0] + rr, p[1] + rr), 3)
+                        pygame.draw.line(cv, (255, 80, 80), (p[0] - rr, p[1] + rr), (p[0] + rr, p[1] - rr), 3)
+                        pygame.draw.circle(cv, acol, p, rr + 4, 2)
+                        lab += f" DEAD? {100 * b['dead_known'][k]:.0f}%"
+                    if b["taken"][k] > 0.5:                        # filled dot: believes already taken
+                        pygame.draw.circle(cv, acol, p, 5)
+                        lab += f" BEEN {100 * b['taken'][k]:.0f}%"
                 cv.blit(font.render(lab, True, col), (p[0] + 4, p[1] - 8))
+        # every v3 variant: architecture badge; a pulsing ring on the sub while it believes it is revisiting
+        if v3:
+            name, acol, _ = ExitMemoryTrace.ARCH[trace.variant]
+            badge = viewer.label_font.render(name, True, (0, 0, 0))
+            bw, bh = badge.get_size()
+            bx, by = cv.get_width() - bw - 24, (70 if state["done"] else 12)   # under the outcome banner at the end
+            pygame.draw.rect(cv, acol, (bx - 8, by - 4, bw + 16, bh + 8), border_radius=6)
+            cv.blit(badge, (bx, by))
+            leg = trace.legend()
+            lw = max(viewer.small.size(l)[0] for l in leg) + 16
+            lp = pygame.Surface((lw, 16 * len(leg) + 10), pygame.SRCALPHA)
+            lp.fill((0, 0, 0, 150))
+            lx = cv.get_width() - lw - 16
+            cv.blit(lp, (lx, by + bh + 12))
+            for i, l in enumerate(leg):
+                cv.blit(viewer.small.render(l, True, acol), (lx + 8, by + bh + 17 + 16 * i))
+            if trace.revisit:
+                o = sp(s.x, s.y)
+                pulse = int(22 + 6 * np.sin(viewer.frame * 0.4))
+                pygame.draw.circle(cv, (255, 150, 60), o, pulse, 3)
+                cv.blit(viewer.small.render("revisit", True, (255, 150, 60)), (o[0] + pulse + 2, o[1] - 8))
+        # exploration bonus: a short "+0.5 new area" flash at the sub
+        if rw_on and 0 <= t - rw["t_explore"] < 0.8:
+            o = sp(s.x, s.y)
+            cv.blit(viewer.label_font.render(f"+{c.explore_bonus:g} new area", True, (120, 255, 140)),
+                    (o[0] + 18, o[1] + 14))
         # drift: remembered (dead-reckoned) vs true position at write time
         if trace.active:
             for m in trace.markers:
                 if m.get("true") is not None:
-                    pygame.draw.line(cv, (200, 200, 200), viewer.to_px(*m["xy"]), viewer.to_px(*m["true"]), 1)
+                    pygame.draw.line(cv, (200, 200, 200), sp(*m["xy"]), sp(*m["true"]), 1)
         # memory log panel
-        lines = [f"{tt:5.1f}s  {msg}" for tt, msg in trace.log[-6:]]
+        lines = [f"{tt:5.1f}s  {msg}" for tt, msg in trace.log[-8:]]
         if lines:
             font = viewer.small
             w = max(font.size(l)[0] for l in lines) + 16
             panel = pygame.Surface((w, 18 * len(lines) + 12), pygame.SRCALPHA)
             panel.fill((0, 0, 0, 170))
-            cv.blit(panel, (10, 80))
+            cv.blit(panel, (10, 48))
             for i, l in enumerate(lines):
-                col = (120, 230, 255) if "STORED" in l else (255, 235, 120)
-                cv.blit(font.render(l, True, col), (18, 86 + 18 * i))
+                col = ((120, 230, 255) if "STORED" in l else (120, 255, 140) if "AVOIDED" in l
+                       else (255, 150, 60) if "RECOGNISED" in l
+                       else (255, 110, 110) if ("ENTERED" in l or "PENALTY" in l)
+                       else (255, 235, 120))
+                cv.blit(font.render(l, True, col), (18, 54 + 18 * i))
         writer.append_data(viewer.rgb_array())
 
     orig_step = env.base.step
@@ -293,7 +452,10 @@ def record_nav_replay(nav, cfg, layout: str, cave_seed: int, difficulty: float, 
         a = nav.act(obs)
         state["choice"], state["t_dec"] = a, env.base._t * env.dt
         trace.after_decision(obs, state["t_dec"])
+        if v3:
+            trace.decide(obs, a, state["t_dec"])
         obs, r, te, tr, info = env.step(a)
+        rw["ret"] += r                                        # (per decision; the counters below are live)
         if te or tr:
             break
     state["done"] = True

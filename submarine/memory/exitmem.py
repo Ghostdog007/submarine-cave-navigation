@@ -210,7 +210,9 @@ class ExitMemoryNet(nn.Module):
         taken_s = (near_w * hsim.clamp(min=0.0) * dep[:, None]).sum(-1)        # rule: left here this way
         ahead_s = (th.exp(-perp2 / s2) * on_ray * dend[:, None]).sum(-1)      # rule: known dead end down it
         loop_s = (near_w[:, 0] * used).sum(-1, keepdim=True)                  # rule: something stored here
-        if c.variant == "graph":
+        if c.variant == "graph":                              # replays: which entries each exit's rules used
+            self.last_weights = {"local": (near_w * hsim.clamp(min=0.0) * dep[:, None]).detach(),
+                                 "ahead": (th.exp(-perp2 / s2) * on_ray * dend[:, None]).detach()}
             return th.stack([taken_s, ahead_s, taken_s * ahead_s], -1), loop_s.clamp(max=3.0)
         # learned reads: content attention + the same geometric terms as learned biases
         ctx_e = th.cat([ctx[:, None].expand(-1, N_SLOTS, -1), e], -1)
@@ -232,6 +234,7 @@ class ExitMemoryNet(nn.Module):
         lq = th.where(used, lq, th.full_like(lq, -1e9))
         att_l = th.softmax(lq, -1) * used.any(-1, keepdim=True)
         loop_feat = th.cat([(att_l[..., None] * memo).sum(1), loop_s.clamp(max=3.0)], 1)
+        self.last_weights = {"local": att.detach(), "ahead": att_a.detach()}   # replays: attention per exit, entry
         return mem, loop_feat
 
     # ------------------------------------------------------------------ sequences (training)

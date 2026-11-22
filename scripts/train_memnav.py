@@ -45,7 +45,7 @@ def main():
     args = p.parse_args()
 
     C = yaml.safe_load(open(args.config, encoding="utf-8"))
-    name = args.name or f"memnav_{args.variant}"
+    name = args.name or f"{C.get('run_prefix', 'memnav')}_{args.variant}"
     run = Path("runs") / name
     run.mkdir(parents=True, exist_ok=True)
     with open(run / "config.yaml", "w", encoding="utf-8") as f:

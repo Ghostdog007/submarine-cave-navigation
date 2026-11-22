@@ -93,6 +93,26 @@ class NavigatorEnvConfig:
     aux_radius: float = 2.0                   # m, "same place"
     aux_loop_path: float = 6.0                # m travelled before a return counts as a loop closure
     aux_heading_cos: float = 0.77             # same exit direction: within ~40 deg
+    # memory-pricing reward (memory-v3.1; all off by default = the original reward). See docs/memory_v3.md.
+    progress: str = "dense"                   # "dense": k_prog per metre of geodesic progress (refunded when
+                                              # backing out of a branch); "record": paid only for beating the
+                                              # best geodesic so far: detours cost their time, the map no longer
+                                              # signals a wrong branch on entry
+    repeat_dead_penalty: float = 0.0          # choosing an exit that already led to a dead end (true labels)
+    repeat_taken_penalty: float = 0.0         # re-taking an exit already taken from here while an untried exit
+                                              # exists HERE. Both only for forward exits at a decision: turning
+                                              # back and driving through explored tunnels (e.g. back to a far
+                                              # junction) are never penalised; they cost only time and energy
+    dead_end_revisit_penalty: float = 0.0     # arriving again at the tip of a dead end already reached and left
+                                              # (>= dead_end_away m): catches re-entry by any route, including
+                                              # turning back in the corridor; never fires heading away from it
+    dead_end_away: float = 4.0                # m
+    dither_penalty: float = 0.0               # turning back again within 2 decisions of a turn back, with no
+                                              # junction reached in between (the U-turn loop out of a dead end);
+                                              # the forced turn at a dead end itself is never penalised
+    explore_bonus: float = 0.0                # per newly visited explore_cell x explore_cell cell
+    explore_cell: float = 2.0                 # m
+    explore_without_cue_only: bool = True     # the bonus only in dives without the goal cue
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "NavigatorEnvConfig":
@@ -194,22 +214,39 @@ class NavigatorEnv(gym.Env):
         for dep in self._departures:                          # returned to where a departure left from: closed
             if dep["open"] and near(dep) and pl - dep["pl"] >= c.aux_loop_path:
                 dep["open"] = False
-        if n_front == 0:                                      # dead end: the latest open departure led here
-            open_ = [dep for dep in self._departures if dep["open"]]
-            if open_:
-                open_[-1]["dead"] = True
+        self._update_tips(s.x, s.y, n_front)
+        if n_front == 0:                                      # dead end: the departure that led straight here
+            if self._departures and self._departures[-1]["open"]:     # (no other junction taken since; else the
+                self._departures[-1]["dead"] = True               # dead end belongs to a later, unseen branch)
         heads = [None if b is None else s.psi + b for b in bearings]
         for k, h in enumerate(heads):
             if h is None:
                 continue
-            for dep in self._departures:
-                if near(dep) and np.cos(dep["h"] - h) > c.aux_heading_cos:
+            for dep in self._departures:                      # (only once it has come back: not the departure
+                if near(dep) and pl - dep["pl"] >= c.aux_loop_path \
+                        and np.cos(dep["h"] - h) > c.aux_heading_cos:     # it is still leaving)
                     out[1 + k] = 1.0
                     if dep["dead"]:
                         out[6 + k] = 1.0
         self._points.append({"x": s.x, "y": s.y, "pl": pl})
         self._pending = {"x": s.x, "y": s.y, "pl": pl, "heads": heads, "junction": n_front >= 2}
+        self._labels = out
         return out
+
+    def _update_tips(self, x: float, y: float, n_front: int):
+        """Dead-end tips (true positions): a revisit = back at a tip after having been >= dead_end_away from it."""
+        c = self.cfg
+        for tip in self._tips:
+            d2 = (tip["x"] - x) ** 2 + (tip["y"] - y) ** 2
+            if d2 > c.dead_end_away ** 2:
+                tip["away"] = True
+            elif d2 < c.aux_radius ** 2 and tip["away"] and n_front == 0:
+                tip["away"] = False
+                self._revisits += 1
+        if n_front == 0 and not any((t["x"] - x) ** 2 + (t["y"] - y) ** 2 < c.aux_radius ** 2 for t in self._tips):
+            self._tips.append({"x": x, "y": y, "away": False})
+        if n_front >= 2:
+            self._junction_since_back = True
 
     def _record_departure(self, k: int):
         p = self._pending
@@ -219,12 +256,26 @@ class NavigatorEnv(gym.Env):
 
     def _drive_until_decision(self):
         """Run the driver until a decision is due or the episode ends. Returns (reward, terminated, truncated)."""
-        e, p = self.base, self.pilot
+        e, p, c = self.base, self.pilot, self.cfg
         total, steps = 0.0, 0
-        min_steps = int(round(self.cfg.min_decide_s / self.dt))
+        min_steps = int(round(c.min_decide_s / self.dt))
+        k_prog = e.cfg.reward.k_prog
+        explore = c.explore_bonus > 0 and not (c.explore_without_cue_only and self._cue)
         while True:
             a = p.drive()                                     # sensing for this step was done by update()
+            g0 = self._info.get("geodesic")
             self._base_obs, r, te, tr, info = e.step(a)
+            if c.progress == "record" and g0 is not None:    # swap the dense progress term for record progress
+                g1 = info["geodesic"]
+                r += -k_prog * (g0 - g1) + k_prog * max(0.0, self._best_geo - g1)
+                self._best_geo = min(self._best_geo, g1)
+            if explore:
+                s = e.sim.state
+                cell = (int(np.floor(s.x / c.explore_cell)), int(np.floor(s.y / c.explore_cell)))
+                if cell not in self._cells:
+                    self._cells.add(cell)
+                    r += c.explore_bonus
+                    self._ep["explore"] += c.explore_bonus
             total += r
             steps += 1
             self._info = info
@@ -254,9 +305,19 @@ class NavigatorEnv(gym.Env):
         self._t_last = 0.0
         self.n_decisions = 0
         self._points, self._departures, self._pending = [], [], None
+        self._labels = np.zeros(AUX_DIM, np.float32)
+        self._best_geo = float(self._info.get("geodesic", np.inf))
+        self._cells = set()
+        self._ep = {"repeat_dead": 0, "repeat_taken": 0, "repeat_penalty": 0.0, "explore": 0.0,
+                    "dead_end_revisits": 0, "dithers": 0}
+        self._tips, self._revisits = [], 0
+        self._last_back, self._junction_since_back = -10, True
         # the cue draw uses its own generator (seeded from the episode) so it never shifts the base env's stream
         rs = np.random.default_rng(None if seed is None else seed + 7919)
         self._cue = self.cfg.goal_cue_prob >= 1.0 or rs.random() < self.cfg.goal_cue_prob
+        if self.cfg.explore_bonus > 0:                        # the start cell is not a discovery
+            s0 = self.base.sim.state
+            self._cells.add((int(np.floor(s0.x / self.cfg.explore_cell)), int(np.floor(s0.y / self.cfg.explore_cell))))
         return self._obs(), dict(self._info, goal_cue=self._cue)
 
     def step(self, action):
@@ -276,6 +337,26 @@ class NavigatorEnv(gym.Env):
             back = True
         else:
             target, back = slots[k].heading, False
+        # repeat penalties from the true labels at this decision (computed with the observation the agent saw)
+        carry_on = penalty > 0
+        lab, c = self._labels, self.cfg
+        taken, dead = lab[AUX["taken"]], lab[AUX["dead_known"]]
+        front = k < N_SLOTS - 1
+        if front and c.repeat_dead_penalty and dead[k] > 0.5:
+            penalty += c.repeat_dead_penalty
+            self._ep["repeat_dead"] += 1
+            self._ep["repeat_penalty"] += c.repeat_dead_penalty
+        elif front and c.repeat_taken_penalty and taken[k] > 0.5 and any(
+                slots[j] is not None and taken[j] < 0.5 for j in range(N_SLOTS - 1)):
+            penalty += c.repeat_taken_penalty
+            self._ep["repeat_taken"] += 1
+            self._ep["repeat_penalty"] += c.repeat_taken_penalty
+        if k == N_SLOTS - 1:                                  # U-turn of a U-turn (not the forced one at a dead end)
+            if c.dither_penalty and n_front > 0 and self.n_decisions - self._last_back <= 2                     and not self._junction_since_back:
+                penalty += c.dither_penalty
+                self._ep["dithers"] += 1
+                self._ep["repeat_penalty"] += c.dither_penalty
+            self._last_back, self._junction_since_back = self.n_decisions, n_front >= 2
         self._record_departure(k)
         heading_nav = nav.psi + float(wrap(target - d.psi))   # chosen heading in the navigation frame
         self._prev = {"x": nav.x, "y": nav.y, "h": heading_nav, "junction": float(n_front >= 2),
@@ -284,6 +365,13 @@ class NavigatorEnv(gym.Env):
         self._t_last = p.t
         self.n_decisions += 1
         reward, te, tr = self._drive_until_decision()
-        info = dict(self._info, n_decisions=self.n_decisions, invalid=requested != k or penalty > 0, choice=k,
-                    requested=requested, goal_cue=self._cue)
-        return self._obs(), float(reward - penalty), te, tr, info
+        obs = self._obs()                                     # (updates the dead-end tips: revisits of this step)
+        if self._revisits:
+            if c.dead_end_revisit_penalty:
+                penalty += c.dead_end_revisit_penalty * self._revisits
+                self._ep["repeat_penalty"] += c.dead_end_revisit_penalty * self._revisits
+            self._ep["dead_end_revisits"] += self._revisits
+            self._revisits = 0
+        info = dict(self._info, n_decisions=self.n_decisions, invalid=requested != k or carry_on, choice=k,
+                    requested=requested, goal_cue=self._cue, **self._ep)
+        return obs, float(reward - penalty), te, tr, info

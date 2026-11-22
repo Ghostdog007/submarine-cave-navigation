@@ -177,6 +177,26 @@ python -m scripts.eval_navigator --config configs/memnav.yaml --layouts maze dec
 python -m scripts.nav_videos --config configs/memnav.yaml --models runs/memnav_exit --layout decoy --caves 1000000
 ```
 
+**v3.1: a reward that prices forgetting** (`configs/memnav_reward.yaml`). Under the dense reward, a wasted dead-end
+detour cost only about 5 reward, refunded on the way out, so memory had nothing to gain. From stage 2 on:
+- progress is paid only for beating the best distance to the goal so far;
+- small repeat penalties: −1.5 for an exit that already led to a dead end, −0.3 for re-taking an exit while one at
+  the same junction is untried. Forward choices only: backtracking to a far junction is never penalised;
+- −1.5 for arriving again at a dead end already reached and left, and −0.3 for turning back again within 2
+  decisions (the U-turn loop out of a dead end). v3 models re-entered 0.55 dead ends per dive, as many as greedy;
+- +0.5 per new 2 m cell in dives without the goal cue;
+- a bigger exit bonus (40), time costs twice as much, and the goal cue drops to 30%.
+
+Also: fixed labels and the gate starting at 0.5. Details in
+[docs/memory_v3.md](docs/memory_v3.md#v31-a-reward-that-prices-forgetting-configsmemnav_rewardyaml).
+
+```powershell
+python -m scripts.collect_nav_demos --config configs/memnav_reward.yaml          # demos with the fixed labels
+python -m scripts.train_memnav --config configs/memnav_reward.yaml --variant none    # -> runs/memnav_r_none
+python -m scripts.train_memnav --config configs/memnav_reward.yaml --variant exit    # -> runs/memnav_r_exit
+python -m scripts.compare_videos --config configs/memnav_reward.yaml --reward-stage m3_full --no-cue ...   # reward shown live
+```
+
 ## Features
 
 - **Procedural caves** from an integer seed, with a difficulty knob d ∈ [0, 1]: width, cracks down to 1.7 m,

@@ -194,3 +194,66 @@ Until then, **round 2's retention navigator on `main` remains the best model** (
 
 Comparison replays (the same caves as `main`'s `videos/08_round2`, plus the hardest decoy and loops caves):
 `videos/09_memory_v3/` (see its README).
+
+The replays make the problem visible. The old exit model's own belief head rates an exit "DEAD? 87%", and its
+strongest recall points at the stored dead end, yet it takes that exit anyway.
+
+## v3.1: a reward that prices forgetting (`configs/memnav_reward.yaml`)
+
+**Why memory went unused.** Under the dense progress reward, memory had almost nothing to gain:
+- *Detours are refunded.* The sub earns +1 per metre of shortest-path progress. Entering a dead end loses that
+  reward and backing out pays it all back, so a wasted 8 m detour costs only its time and energy: about 5 reward,
+  against about +57 for a success.
+- *The map flags wrong turns.* Progress is computed from the true map, so the reward reports a wrong branch the
+  moment it is entered; no memory is needed to learn that.
+- *The goal bearing is usually there.* With it shown in 70% of dives, a memoryless policy collects nearly all the
+  reward.
+
+The belief heads learned the facts (83–91% recall), but acting on them paid too little to open the gate.
+
+**Changes.** Stage 1 keeps the dense reward so the basics are learned fast. From stage 2 on:
+
+| Change | Setting | Effect |
+|---|---|---|
+| Record progress | `progress: record` | paid only for beating the best distance to the goal so far: no "wrong branch" signal on entry, no refund on the way out |
+| Repeat a dead end | `repeat_dead_penalty: 1.5` | choosing an exit that already led to a dead end (a small nudge on top of the detour's own cost) |
+| Re-take an exit | `repeat_taken_penalty: 0.3` | only while an exit at the same junction is untried |
+| Revisit a dead end | `dead_end_revisit_penalty: 1.5` | arriving again at the tip of a dead end already reached and left (≥ 4 m). Catches re-entry by any route, including turning back in its corridor, which has no junction for the exit penalty to fire at. The v3 models re-entered 0.55 dead ends per dive, the same as greedy (0.58); the oracle re-entered 0.24 |
+| U-turn loop | `dither_penalty: 0.3` | turning back again within 2 decisions with no junction in between: the flip-flop out of a dead end (the goal bearing behind the sub pulls it back in). The forced turn at a dead end is free |
+| Exploration bonus | `explore_bonus: 0.5` | per new 2 m cell, only in dives without the goal cue |
+| Finishing | goal 20 → 40, `k_time` 0.01 → 0.02 | a timeout is clearly worse than finishing |
+| Goal cue | 0.7 → 0.3 | memory, not the bearing, has to carry most dives |
+
+**Backtracking to a far junction is never penalised.** The penalties apply only to *forward* exit choices at a
+decision, using the simulator's true labels. Turning back and driving through explored tunnels cost only their
+time and energy. With record progress, nothing is clawed back on the way. The exploration bonus then pays for
+reaching new ground at the far end.
+
+**Other fixes:**
+- *Labels:* a departure counts as "taken" only once the sub has travelled 6 m and come back. A dead end is credited
+  only to the departure that led straight to it, with no other junction taken in between.
+- *Gate:* starts at 0.5 (`gate_init: 0`).
+- *Demonstrations:* re-collected (`runs/memnav_r_demos.npz`), because the old ones carry the old labels.
+
+Decoys are not yet randomised.
+
+**Test.** A controlled pair under the same reward: `none` (the control) and `exit`, in `runs/memnav_r_*`. If the
+reward was the bottleneck:
+- `exit` should pull ahead of `none` on loops, mazes and breakdown caves;
+- its gate should open;
+- dead-end repeats should fall.
+
+Tests: `tests/test_memnav.py`:
+- record progress pays exactly start minus best;
+- penalties match the true labels and never apply to turning back;
+- the exploration bonus is off when the cue is shown;
+- "taken" waits for a return.
+
+**Replays** show the reward live:
+- a fourth status line with the dive's reward, repeat penalties and exploration bonus;
+- red `PENALTY` log lines saying why;
+- a "+0.5 new area" flash for each bonus.
+
+```
+python -m scripts.compare_videos --config configs/memnav_reward.yaml --reward-stage m3_full [--no-cue] ...
+```

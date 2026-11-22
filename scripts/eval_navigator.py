@@ -95,8 +95,9 @@ class MemNavNavigator:
         if self.wipe:
             self.reset()
         with th.no_grad():
-            logits, _, _, self.state = self.model.step(th.as_tensor(obs[None], dtype=th.float32), self.state,
-                                                       self.start)
+            logits, _, aux, self.state = self.model.step(th.as_tensor(obs[None], dtype=th.float32), self.state,
+                                                         self.start)
+        self.last_aux = {k: th.sigmoid(v[0]).numpy() for k, v in aux.items()}   # beliefs (replays)
         self.start = th.zeros(1)
         return int(logits[0].argmax())
 

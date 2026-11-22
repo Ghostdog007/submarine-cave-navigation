@@ -173,6 +173,108 @@ def test_aux_labels_ride_in_the_observation_and_mark_revisits():
     assert seen["taken"] > 0                              # wandering a maze revisits junctions
 
 
+def _paired_dives(extra: dict, layout="maze", steps=120, seed=5):
+    """The same dive (same cave, seeds, actions) in a default env and one with `extra` reward settings."""
+    from submarine.navigator import NavigatorEnv, OracleNavigator, slot_valid
+
+    base = {"env": {"layout": layout, "difficulty": 0.0, "max_steps": 1500}, "aux_labels": True}
+    envs = [NavigatorEnv(base), NavigatorEnv({**base, **extra})]
+    rs = [e.reset(seed=seed, options={"cave_seed": seed, "difficulty": 0.0}) for e in envs]
+    obs = [r[0] for r in rs]
+    teacher = OracleNavigator()
+    teacher.attach(envs[0])
+    rng = np.random.default_rng(seed)
+    out = []
+    for _ in range(steps):
+        valid = np.flatnonzero(slot_valid(obs[0]))
+        a = int(rng.choice(valid)) if rng.random() < 0.6 and valid.size else teacher.act(obs[0])
+        res = [e.step(a) for e in envs]
+        np.testing.assert_array_equal(res[0][0][OBS_DIM:], res[1][0][OBS_DIM:])   # same dive, same labels
+        out.append((obs[1], a, res[0][1], res[1][1], res[1][4]))
+        obs = [r[0] for r in res]
+        if res[0][2] or res[0][3]:
+            break
+    return out, rs[1][1]["geodesic"]
+
+
+def test_record_progress_pays_only_new_best_geodesic():
+    dive, g_start = _paired_dives({"progress": "record"})
+    geos = [d[4]["geodesic"] for d in dive]
+    diff = sum(d[3] - d[2] for d in dive)
+    # dense pays (start - end), record pays (start - best): the difference is k_prog * (best - end) <= 0
+    assert diff == pytest.approx(min(min(geos), g_start) - geos[-1], abs=1e-3)   # k_prog = 1
+    assert diff <= 1e-6
+
+
+def test_repeat_penalties_follow_the_true_labels():
+    from submarine.navigator import AUX, NavigatorEnv
+
+    dive, _ = _paired_dives({"repeat_dead_penalty": 3.0, "repeat_taken_penalty": 1.0}, steps=200)
+    total = 0.0
+    for obs, a, r0, r1, info in dive:
+        lab = obs[OBS_DIM:]
+        taken, dead = lab[AUX["taken"]], lab[AUX["dead_known"]]
+        valid = obs[OBS["slots"]].reshape(N_SLOTS, SLOT_DIM)[:N_SLOTS - 1, 0] > 0.5
+        k = NavigatorEnv.resolve(a, list(valid) + [True])
+        untried = bool(np.any(valid & (taken[:N_SLOTS - 1] < 0.5)))
+        front = k < N_SLOTS - 1                                  # turning back is never penalised
+        p = 3.0 if front and dead[k] > 0.5 else (1.0 if front and taken[k] > 0.5 and untried else 0.0)
+        assert r1 == pytest.approx(r0 - p, abs=1e-4)
+        total += p
+    assert total > 0                                             # the wandering dive did repeat itself
+
+
+def test_dead_end_revisit_and_u_turn_penalties_add_up():
+    """A dive that turns back often: the reward gap equals the counted revisit and U-turn-loop penalties."""
+    from submarine.navigator import NavigatorEnv, slot_valid
+
+    base = {"env": {"layout": "maze", "difficulty": 0.0, "max_steps": 1500}, "aux_labels": True}
+    envs = [NavigatorEnv(base), NavigatorEnv({**base, "dead_end_revisit_penalty": 1.5, "dither_penalty": 0.3})]
+    obs = [e.reset(seed=4, options={"cave_seed": 4, "difficulty": 0.0})[0] for e in envs]
+    rng = np.random.default_rng(2)
+    gap, n_back_at_dead_end = 0.0, 0
+    for _ in range(250):
+        valid = np.flatnonzero(slot_valid(obs[0]))
+        a = N_SLOTS - 1 if rng.random() < 0.4 else int(rng.choice(valid))
+        dead_end = not obs[0][OBS["slots"]].reshape(N_SLOTS, SLOT_DIM)[:N_SLOTS - 1, 0].any()
+        before = dict(envs[1]._ep)
+        res = [e.step(a) for e in envs]
+        ep = res[1][4]
+        d_rev, d_dith = ep["dead_end_revisits"] - before["dead_end_revisits"], ep["dithers"] - before["dithers"]
+        if dead_end:
+            assert d_dith == 0                                   # the forced turn at a dead end is free
+            n_back_at_dead_end += 1
+        assert res[1][1] == pytest.approx(res[0][1] - 1.5 * d_rev - 0.3 * d_dith, abs=1e-4)
+        gap += res[0][1] - res[1][1]
+        obs = [r[0] for r in res]
+        if res[0][2] or res[0][3]:
+            break
+    assert envs[1]._ep["dithers"] > 0 and gap > 0
+
+
+def test_exploration_bonus_only_without_the_goal_cue():
+    with_cue, _ = _paired_dives({"explore_bonus": 0.5}, steps=30)
+    assert all(d[3] == pytest.approx(d[2]) for d in with_cue)   # cue shown (default 1.0): no bonus
+    blind, _ = _paired_dives({"explore_bonus": 0.5, "goal_cue_prob": 0.0}, steps=30)
+    bonus = blind[-1][4]["explore"]
+    assert bonus > 0 and (bonus / 0.5) == pytest.approx(round(bonus / 0.5))
+
+
+def test_taken_label_waits_until_the_sub_comes_back():
+    from submarine.navigator import AUX, NavigatorEnv
+
+    env = NavigatorEnv({"env": {"layout": "maze", "difficulty": 0.0, "max_steps": 1500}, "aux_labels": True})
+    obs, info = env.reset(seed=3, options={"cave_seed": 3, "difficulty": 0.0})
+    rng = np.random.default_rng(1)
+    for _ in range(150):
+        if obs[OBS_DIM:][AUX["taken"]].any():                    # only for a departure >= 6 m of travel ago
+            pl = env._info["path_length"]
+            assert any(pl - d["pl"] >= env.cfg.aux_loop_path for d in env._departures)
+        obs, r, te, tr, info = env.step(int(rng.integers(N_SLOTS)))
+        if te or tr:
+            break
+
+
 def test_goal_cue_can_be_withheld():
     from submarine.navigator import NavigatorEnv
 

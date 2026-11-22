@@ -30,7 +30,7 @@ from submarine.world import Cave
 from . import art
 from submarine.sim.simulator import SimStep, Simulator
 
-HUD_H = 64
+HUD_H = 64                      # 3 status lines (Viewer(hud_h=82) for 4)
 
 WATER_EDGE = np.array([40, 105, 160])
 WATER_DEEP = np.array([10, 38, 78])
@@ -61,7 +61,8 @@ def _lerp(a, b, t):
 class Viewer:
     def __init__(self, cave: Cave, scale: float | None = None, show_geodesic: bool = False, headless: bool = False,
                  style: str = "game", theme: str = "ice", darkness: float = 0.5,
-                 camera: str = "full", view_size: tuple[int, int] = (1280, 720)):
+                 camera: str = "full", view_size: tuple[int, int] = (1280, 720), hud_h: int = HUD_H):
+        self.hud_h = hud_h
         """scale: pixels per metre (default 20 for camera="full", 48 for "follow").
         headless=True draws off-screen (rgb_array rendering / video).
         darkness (game style): 0 = fully lit, 1 = black outside the lights.
@@ -82,7 +83,7 @@ class Viewer:
             self.vw, self.vh = min(view_size[0], self.w), min(view_size[1], self.h)
         else:
             self.vw, self.vh = self.w, self.h
-        size = (self.vw, self.vh + HUD_H)
+        size = (self.vw, self.vh + self.hud_h)
         if headless:
             pygame.font.init()
             self.screen = pygame.Surface(size)
@@ -362,7 +363,7 @@ class Viewer:
         weights on them this step [{xy, dead_end, idx, w}]."""
         self.frame += 1
         s = step.state
-        view = self._update_camera(s.x, s.y)
+        view = self.view = self._update_camera(s.x, s.y)
         # only touch the visible part of the (possibly large) canvas
         clip = view.inflate(8, 8).clip(pygame.Rect(0, 0, self.w, self.h))
         for surf in (self.canvas, self.overlay) + ((self.dark,) if self.style == "game" else ()):
@@ -570,7 +571,7 @@ class Viewer:
             scr.blit(box, (8, 8))
             scr.blit(txt, (15, 12))
 
-        pygame.draw.rect(scr, (20, 22, 30), (0, self.vh, self.vw, HUD_H))
+        pygame.draw.rect(scr, (20, 22, 30), (0, self.vh, self.vw, self.hud_h))
         pygame.draw.line(scr, (70, 80, 100), (0, self.vh), (self.vw, self.vh), 1)
         for i, line in enumerate(hud):
             scr.blit(self.font.render(line, True, (225, 225, 225)), (10, self.vh + 8 + 18 * i))
