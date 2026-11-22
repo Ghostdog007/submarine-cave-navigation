@@ -22,8 +22,8 @@ controllers and a map-aware oracle on held-out caves.
 > | M v3.1: reward that prices forgetting | trained and tested: **no gain for memory** (exit 70.7%, no memory 72.0%); it made both explore untried exits more |
 > | M v3.2: event-triggered per-exit memory gate + belief bias | trained and tested: **memory is used selectively** (gate 0.83 at known dead ends vs 0.40 at fresh junctions) and known dead ends are avoided most of any model (61–70%), but success did not rise (66.7% standard, 48–55% rings / hub) |
 > | M memory caves (`rings`, `hub`) + wall-follower baselines | built: the old caves turned out **solvable without memory**; on the new ones every reactive rule fails (greedy 5%, wall following 37–42%, oracle 100%) and v3 exit memory re-enters dead ends ~25% less than no memory. 148/148 tests pass |
-> | **M v3.3: v3.2 trained on the memory caves (+ a memoryless control)** | **training** (started 22 Nov 23:52), with the speed-ups below |
-> | Training speed-ups | memory reads as batched matmuls (same outputs, learner ~2× faster); 60 envs on 15 workers, minibatches of 15, warm start in 32 lanes, 1 learner thread. Measured: warm start ~3–4× faster, PPO 1–1.9× (stage 3 is now limited by the cave simulation). The GPU was measured *slower* for this tiny step-by-step model |
+> | **M v3.3: v3.2 trained on the memory caves (+ a memoryless control)** | **training** (started 23 Nov 02:40) with v3.2's training settings; evaluation and rings / hub videos follow automatically |
+> | Training speed-up | memory reads as batched matmuls: same outputs, learner ~2× faster. The GPU was measured *slower* for this tiny step-by-step model |
 
 ![game-style renderer](docs/figures/game_renderer_drive.png)
 
@@ -129,8 +129,8 @@ design is meant to fix that.
 | **Diagnosis** | Wall-follower baselines; blind tests | **The caves never needed memory.** "Keep a hand on the wall" solves every old cave; a memoryless policy learned such a reactive rule and re-entered dead ends as rarely as the oracle (0.26 vs 0.24 per dive) |
 | **Memory caves** | `rings` (start inside two rings: both walls are islands) and `hub` (one chamber, dead-end spokes pointing at the exit) | Every reactive rule collapses (greedy 5%, wall following 37–42%, oracle 100%). **First real memory signal:** v3 exit memory re-enters dead ends ~25% less than its memoryless twin |
 | **v3.2** | Event-triggered per-exit memory gate + belief bias + reliance probes | **Breakthroughs below.** Memory is used *when it matters* and known dead ends are avoided most of any model, but success did not rise: its training caves still did not reward memory, so RL pruned it |
-| **Speed** | Profiling | The memory model was per-op-overhead bound, not simulation-bound. Batched matmul reads (same outputs) + bigger batches: warm start 3–4× faster, PPO 1–1.9×. GPU measured slower for this tiny model |
-| **v3.3** | v3.2 trained on rings and hub, with a memoryless control trained identically | **Training** (started 22 Nov 23:52) |
+| **Speed** | Profiling | The memory model was per-op-overhead bound, not simulation-bound. Batched matmul reads: same outputs, learner ~2× faster. GPU measured slower for this tiny model |
+| **v3.3** | v3.2 trained on rings and hub, with v3.2's exact training settings, and a memoryless control trained identically | **Training** (started 23 Nov 02:40) |
 
 **v3.2 breakthroughs:**
 1. **The memory gate finally moves, and selectively.** The old single gate never moved: it was a redundant scale
@@ -326,10 +326,10 @@ avoided):
   hub with the cue). Avoiding the dead ends it knows is not enough when it still wanders elsewhere.
 - So the belief bias works as designed. What is missing is training where remembering pays, which is v3.3.
 
-### v3.3: train on the memory caves (`configs/memnav_caves.yaml`)
+### v3.3: train on the memory caves (`configs/memnav_caves_clean.yaml`)
 
-The v3.2 model and reward, with rings and hub as a third of stages 2–3 (hub also in stage 1) and teacher demos
-that include them. Two runs: `exit` (event gate + belief bias) and a memoryless control `none` on the same caves
+The v3.2 model, reward and training settings, with rings and hub as a third of stages 2–3 (hub also in stage 1)
+and teacher demos that include them: the cave mix is the only change from v3.2. Two runs: `exit` (event gate + belief bias) and a memoryless control `none` on the same caves
 (`train_memnav` drops the gate / bias settings for variants without a store). Evaluation uses different cave seeds
 from training, so rings / hub stay unseen caves. **The question:** with caves where forgetting costs, does RL keep
 the memory instead of pruning it, and does exit memory beat its memoryless twin on rings / hub?
@@ -347,21 +347,23 @@ the memory instead of pruning it, and does exit memory beat its memoryless twin 
   falling to ~7%, and no loss on the old cave types. The oracle (100%) is the ceiling; "clearly better than its
   memoryless twin" is the bar.
 
-**Comparison videos** (rings and hub, blind dives), five navigators side by side:
+**Comparison videos** (`videos/10_memory_caves_clean`; rings and hub, blind dives), six navigators side by side:
 
 | In the video | Run | Memory | Trained on rings / hub |
 |---|---|---|---|
-| New memory model | `memnav_c_exit` (v3.3) | yes (event gate + belief bias) | yes |
-| New model without memory | `memnav_c_none` (v3.3 control) | no | yes |
+| New memory model | `memnav_cc_exit` (v3.3) | yes (event gate + belief bias) | yes |
+| New model without memory | `memnav_cc_none` (v3.3 control) | no | yes |
+| Event-gate model | `memnav_e_exit` (v3.2) | yes (event gate + belief bias) | no |
 | Old memory model | `memnav_exit` (v3) | yes | no |
 | Wall follower | `nav-wall-left` (a fixed rule, not trained) | no | |
 | Oracle | `nav-oracle` (a fixed rule that reads the true map) | sees the map | |
 
 ```powershell
-python -m scripts.collect_nav_demos --config configs/memnav_caves.yaml --workers 8    # demos incl. rings, hub
-python -m scripts.train_memnav --config configs/memnav_caves.yaml --variant exit       # -> runs/memnav_c_exit
-python -m scripts.train_memnav --config configs/memnav_caves.yaml --variant none       # -> runs/memnav_c_none
-python -m scripts.eval_navigator --config configs/memnav_reward.yaml --layouts rings hub --policies greedy oracle wall-left wall-right --models runs/memnav_c_none runs/memnav_c_exit
+python -m scripts.collect_nav_demos --config configs/memnav_caves_clean.yaml --workers 8 --out runs/memnav_c_demos.npz
+python -m scripts.train_memnav --config configs/memnav_caves_clean.yaml --variant exit    # -> runs/memnav_cc_exit
+python -m scripts.train_memnav --config configs/memnav_caves_clean.yaml --variant none    # -> runs/memnav_cc_none
+python -m scripts.eval_navigator --config configs/memnav_reward.yaml --layouts rings hub --policies greedy oracle wall-left wall-right --models runs/memnav_cc_none runs/memnav_cc_exit
+python -m scripts.compare_videos --config configs/memnav_caves_clean.yaml --reward-stage m3_full --no-cue --layouts rings hub --navigators runs/memnav_cc_exit runs/memnav_cc_none runs/memnav_e_exit runs/memnav_exit wall-left oracle --csv runs/eval/memcaves_cue_episodes.csv --out videos/10_memory_caves_clean
 ```
 
 ## Features

@@ -1,13 +1,15 @@
-# memory-v3.3 CLEAN: v3.3's training caves (rings, hub) and demos, with v3.2's EXACT training settings.
+# memory-v3.3: the v3.2 model (event gate + belief bias) and v3.1 reward, TRAINED on the memory-necessary caves
+# (rings, hub) as well, with v3.2's exact training settings. Only the cave mix and the demos differ from v3.2.
+#   python -m scripts.collect_nav_demos --config configs/memnav_caves_clean.yaml --workers 8 --out runs/memnav_c_demos.npz
 #   python -m scripts.train_memnav --config configs/memnav_caves_clean.yaml --variant exit   # -> runs/memnav_cc_exit
 #   python -m scripts.train_memnav --config configs/memnav_caves_clean.yaml --variant none   # -> runs/memnav_cc_none
 #
-# Why: v3.3 (configs/memnav_caves.yaml) changed two things at once, the caves AND the training setup (60 envs,
-# minibatches of 15, warm start in 32 lanes at lr 2e-3, 1 thread). Its exit model got WORSE on rings / hub (36.7%
-# with the cue, avoiding known dead ends only 31%) and its control dropped on the old caves (72% -> 66%), so the
-# setup may be the cause. Here only the cave mix changes from v3.2 (configs/memnav_event.yaml): 30 envs on 5
-# workers, minibatches of 8, warm start in 8 lanes / 10 epochs / lr 1e-3, 2 learner threads. The only speed-up
-# kept is exact: the batched-matmul memory reads (same outputs to 3e-5).
+# Why: on the old training caves a reactive rule is enough, so RL pruned memory (v3.2: memory changed 39% -> 7% of
+# choices at known dead ends). On rings / hub every reactive rule fails (greedy 5-20%, wall following 37-42%,
+# oracle 100%). Stage mixes: rings and hub are a third of stages 2-3; hub (goal cue on) joins stage 1.
+# Training settings are v3.2's (30 envs on 5 workers, minibatches of 8, warm start in 8 lanes / 10 epochs / lr 1e-3,
+# 2 learner threads): a faster setup (60 envs, bigger minibatches and warm-start batches) was tried and dropped, as
+# it trained worse. The only speed-up kept is exact: batched-matmul memory reads (same outputs to 3e-5).
 #
 # ---- v3.2 notes (configs/memnav_event.yaml) ----
 # memory-v3.2: the v3.1 reward + an EVENT-TRIGGERED per-exit memory gate and a belief bias on the exit scores.
