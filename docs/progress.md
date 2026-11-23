@@ -208,6 +208,12 @@ silt-out scenario (one huge dense cloud, 30 caves × d ∈ {0.5, 1}) fused 82% v
 vs gap 52%, because nearby walls still show faintly through the veil. But a dead camera (sensor failure) breaks it.
 Planned fix: train with random camera failures so the network must learn to steer on sonar alone (stage 8).
 
+**Decision (21 Nov 2026): the agent goes sonar-only.** From the two-level architecture on (stage 9 and the memory
+work), the driver and the navigator use sonar alone. Fusion scored best (93% vs 88%), but sonar is what real
+submarines mainly navigate by, it gives the true ranges the safety filter needs, it is unaffected by murk, and the
+fused agent's collapse with a dead camera (0/50) showed how much it leaned on the more fragile sensor. Camera-based
+place recognition (appearance loop closure for the junction memory) remains a possible later experiment.
+
 ## Stage 6: Test scenarios from real cave exploration, and energy
 
 **New cave layouts** (`cave/layouts.py`, `env.layout`), each modelled on a hazard cave explorers actually face.

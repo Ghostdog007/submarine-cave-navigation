@@ -13,7 +13,7 @@ your own config and run names.
 | Step | Script | Writes to | Typical time (CPU) |
 |---|---|---|---|
 | 1. Config | (edit YAML) | `configs/<name>.yaml` | – |
-| 2. Smoke test | `pytest`, `train_memnav --scale 0.01` | `runs/<name>_smoke/` | 2–3 min |
+| 2. Smoke test | `pytest`, `train_memnav --scale 0.01` | `runs/<name>_smoke/` | ~15 min |
 | 3. Teacher demos | `collect_nav_demos` | `runs/<demos>.npz` | ~10 min |
 | 4. Train | `train_memnav` | `runs/<prefix>_<variant>/` | 1.5–3 h |
 | 5. Monitor | `watch_training`, TensorBoard | (read-only) | – |
@@ -55,7 +55,7 @@ Write *why* at the top of the file: what changed from the previous version and w
 ## 2. Smoke test
 
 ```powershell
-python -m pytest -q                                          # full suite, ~1 min
+python -m pytest -q                                          # full suite, ~12 min (155 tests)
 python -m scripts.collect_nav_demos --config configs/memnav_caves_clean.yaml --decisions 3000 --workers 4 --out runs/smoke_demos.npz
 python -m scripts.train_memnav --config configs/memnav_caves_clean.yaml --variant exit --scale 0.01 --workers 2 --name smoke --demos runs/smoke_demos.npz
 ```

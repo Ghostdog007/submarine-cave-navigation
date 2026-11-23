@@ -25,7 +25,8 @@ twin, trained identically, goes back round the ring and times out.</sub>
 - 🗺️ **The world:** procedurally generated 2D ice caves: mazes, dead ends, glacier cracks, boulder chokes, murky
   water, sensor failures and currents. Every cave is new; every test cave is unseen in training.
 - 🧠 **The agent:** two levels. A **driver** steers at 10 Hz behind a built-in safety filter: **0 crashes in 600
-  test dives**. A **navigator** decides only at junctions which passage to take, using a learned **exit memory**.
+  test dives**. A **navigator** decides only at junctions which passage to take, using a learned **exit memory**. Both run on
+  **sonar alone**: a camera was tested (stage 5) and set aside.
 - 🏆 **The result:** on caves built so that only memory helps, the memory navigator beats its identical
   memoryless twin by **+13 points** (71.7% vs 58.3%), with ~20–30% fewer dead-end re-entries.
   Over the same caves it wins 22 head-to-heads to 7 (**p = 0.008**).
@@ -73,6 +74,12 @@ The same hard, murky cave, three agents, top to bottom:
 
 Fused, the agent succeeds on 86% of the hardest murky caves, against 64% with either sense alone.
 
+**Why the camera was then dropped:** sonar is what real submarines mainly navigate by. It measures true ranges,
+which the safety filter needs, and it keeps working in murk. The fused agent had also learned to lean on its
+camera: with the camera blanked it fell from 43/50 to 0/50 on hard caves, although its sonar still worked. So
+from the two-level agent on, everything runs on sonar only. Camera-based place recognition stays a possible later
+experiment.
+
 <br clear="right">
 
 ### PPO clears a hardest-level cave
@@ -98,6 +105,7 @@ Each step asked one question. The answers, good and bad, shaped the next one.
 | 2 | PPO, easy caves only | Does RL learn to drive? | Only what it saw: **31%** overall, it learned to chase the goal bearing, not to avoid walls |
 | 3 | PPO, mixed difficulty | And with a curriculum? | ✅ **94%** overall, **82%** on the hardest caves (oracle 100%) |
 | 5 | Sonar + camera in murky water | Do two senses beat one? | ✅ Fused **93%** vs sonar 88%, camera 84%; on the hardest caves 86% vs 64% |
+| 🔊 | Decision: sonar only | Keep the camera for the agent? | **No.** Fusion scored best, but real submarines navigate mainly by sonar, the safety filter needs true ranges, murk blinds the camera, and with its camera blanked the fused agent fell from 43/50 to 0/50 on hard caves. From here on the agent is **sonar-only** |
 | 7 | End-to-end memory agents | Can one network drive *and* remember? | Memory cut maze dead-end re-entries **~11×**, but crashes ate every gain |
 | A | Driver + safety filter | Split driving from deciding? | ✅ **0 crashes in 150** test dives, learned driver as good as the hand one |
 | B | Navigators (round 2) | Does memory help a navigator that can't crash? | ✅ Retention memory **88.7%** vs greedy 82.0% (p = 0.006); **0 crashes in 600 dives** |
@@ -250,7 +258,7 @@ Requires Windows or Linux and Python 3.12. A GPU is optional: these networks tra
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1            # Linux/macOS: source .venv/bin/activate
 pip install -r requirements.txt
-pytest                                  # full suite
+pytest                                  # full suite: 155 tests, ~12 min
 
 # drive the submarine yourself (arrows/WASD, R restart, N/P next/previous cave)
 python -m scripts.drive --difficulty 0.5 --theme rock --camera full
