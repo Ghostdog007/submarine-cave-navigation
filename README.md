@@ -395,6 +395,21 @@ those settings, not the caves, were the problem, and were dropped.)
 | Wall follower | `nav-wall-left` (a fixed rule, not trained) | no | |
 | Oracle | `nav-oracle` (a fixed rule that reads the true map) | sees the map | |
 
+**What the videos show** (recorded 23 Nov; blind, d = 0.5; ✓ = exit reached, ✗ = 150 s timeout). The first two
+caves are the hardest ones the oracle solves (a stress test); the last two were picked to show the v3.3 memory model:
+
+| Cave | v3.3 memory | v3.3 control | v3.2 | v3 | Wall-left | Oracle |
+|---|---|---|---|---|---|---|
+| rings 1000007 (hardest; 0 of 11 navigators solved it in evaluation) | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ 57 s |
+| hub 1000013 (hardest; 1 of 11) | ✗ | ✗ | ✗ | ✗ | ✓ 58 s | ✓ 56 s |
+| **rings 1000008** | **✓ 61 s** | ✗ | ✗ | ✗ | ✗ | ✓ 61 s |
+| **hub 1000000** | **✓ 82 s** | ✗ | ✓ 84 s | ✗ | ✗ | ✓ 54 s |
+
+Watch `rings_cave1000008_*` (only the v3.3 memory model and the oracle get out, equally fast) and
+`hub_cave1000000_*` (the memoryless control, v3 and the wall follower all time out). The full per-video table is
+in [videos/10_memory_caves_clean/README.md](videos/10_memory_caves_clean/README.md); the `.mp4` files (1.1 GB) are
+git-ignored like all replays and are regenerated with the command below.
+
 ```powershell
 python -m scripts.collect_nav_demos --config configs/memnav_caves_clean.yaml --workers 8 --out runs/memnav_c_demos.npz
 python -m scripts.train_memnav --config configs/memnav_caves_clean.yaml --variant exit    # -> runs/memnav_cc_exit
