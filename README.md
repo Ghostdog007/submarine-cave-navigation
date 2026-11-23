@@ -169,19 +169,65 @@ Full lab notebook, with every table: [docs/memory_v3.md](docs/memory_v3.md).
 
 ## Watch it
 
-Replays show sonar, stored memories, recalled entries, the memory gate and the agent's beliefs live. The `.mp4`
-files are git-ignored (regenerate with `scripts.record` / `scripts.compare_videos`); [videos/](videos) keeps one or
-two clips per stage.
+Replays show the sonar, stored memories, recalled entries, the memory gate and the agent's beliefs live. The
+previews below are compressed, sped-up excerpts (4× real time, 8× for the round-2 maze). The full-quality `.mp4`
+files are git-ignored: regenerate them with `scripts.record` / `scripts.compare_videos` (see [videos/](videos)).
 
-| Clip | What happens |
-|---|---|
-| `10_memory_caves_clean/rings_cave1000008_*` | ⭐ v3.3 memory escapes the rings in 61 s, as fast as the oracle; its twin goes back round the ring and times out |
-| `10_memory_caves_clean/hub_cave1000000_*` | ⭐ v3.3 memory finds the way out of the chamber in 82 s; its twin, v3 and the wall follower all time out |
-| `09_memory_v3/decoy_cave1000008_*` | a decoy passage points straight at the exit: greedy is trapped in it, the v3 navigators get through |
-| `08_round2/maze_cave1000000_*` | retention memory is the only learned navigator to solve this maze |
-| `05_camera_and_murky_water/sonar_vs_camera_vs_fused_*` | in thick silt only the sonar + camera agent reaches the exit |
-| `03_ppo_mixed_difficulty/ppo_mixed_follow_cam_success_*` | follow camera: PPO clears a hardest-level cave in 42 s |
-| `04_game_renderer/oracle_follow_cam_ice_theme_*` | the game-style renderer: ice theme, minimap, headlight, caustics |
+### ⭐ v3.3: memory escapes the rings
+
+**Left:** v3.3 exit memory. **Right:** its memoryless twin, trained identically. Blind dive, no goal bearing. The
+memory model stores each junction it leaves, recognises the ring it has already been round, and gets out in 61 s,
+as fast as the oracle. The twin goes back round the ring and times out.
+
+![v3.3 memory vs its memoryless twin on a rings cave](docs/media/v33_rings.webp)
+
+### ⭐ v3.3: memory finds the way out of the hub
+
+**Left:** v3.3 exit memory. **Right:** its memoryless twin. Most spokes of the chamber are dead ends pointing at the
+exit, and every one leads back to a chamber that looks the same. The memory model gets out in 82 s; the twin, v3
+and the wall follower all time out.
+
+![v3.3 memory vs its memoryless twin on a hub cave](docs/media/v33_hub.webp)
+
+### v3: the decoy that traps greedy
+
+**Left:** v3 exit memory. **Right:** greedy (always follow the goal bearing). A side passage points straight at the
+exit and ends blind. Greedy keeps being pulled back into it; the memory navigator exits in 58 s.
+
+![v3 exit memory vs greedy on a decoy cave](docs/media/v3_decoy.webp)
+
+### Round 2: retention memory solves the maze
+
+**Left:** the retention-memory navigator. **Right:** the same navigator without memory. Retention memory is the only
+learned navigator to get out of this maze (144 s); without memory it times out.
+
+![retention memory vs no memory in a maze](docs/media/round2_maze.webp)
+
+### Two senses beat one in murky water
+
+<img src="docs/media/sensors_murky.webp" alt="sonar only, camera only, and sonar plus camera in thick silt" width="400" align="right">
+
+The same hard, murky cave, three agents, top to bottom:
+- **sonar only** misses the narrow exit, detours round a pillar and crashes (24.2 s);
+- **camera only** crashes in thick silt (19.6 s);
+- **sonar + camera** reaches the exit (34.5 s).
+
+Fused, the agent succeeds on 86% of the hardest murky caves, against 64% with either sense alone.
+
+<br clear="right">
+
+### PPO clears a hardest-level cave
+
+Follow camera on the PPO agent trained with a difficulty curriculum: through the hardest cave level in 42 s, with
+the minimap and the sonar's view of the walls.
+
+![PPO with follow camera clearing a hardest-level cave](docs/media/ppo_follow_cam.webp)
+
+### The game-style renderer
+
+Ice theme, follow camera, minimap, headlight, caustics, bubbles and sonar pings (the oracle driving).
+
+![game-style renderer, ice theme](docs/media/game_renderer.webp)
 
 ## Scenarios
 
