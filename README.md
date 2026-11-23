@@ -49,6 +49,15 @@ and the wall follower all time out.
 
 ![v3.3 memory vs its memoryless twin on a hub cave](docs/media/v33_hub.webp)
 
+### ⭐ Four versions, one cave
+
+The same blind hub dive (cave 1000000) for each version of the navigator. **Round 2** keeps re-taking passages that
+already led to dead ends (red PENALTY lines) and times out. **v3** remembers the dead end, then enters it anyway
+("ENTERED A despite dead-end belief 89%") and times out. **v3.2** and **v3.3** act on what they remember and reach
+the exit (84 s, 82 s).
+
+![round 2, v3, v3.2 and v3.3 on the same hub cave](docs/media/versions_hub.webp)
+
 ### v3: the decoy that traps greedy
 
 **Left:** v3 exit memory. **Right:** greedy (always follow the goal bearing). A side passage points straight at the
@@ -167,6 +176,7 @@ Two cave types designed so that no reactive rule works:
 - **The round-2 navigators walk into the trap.** They always had the goal bearing in training, and here the bearing
   points at dead ends: with it shown they re-enter dead ends 2.6–3.4 times per dive, like greedy, and solve
   8–23%. Blind they do better (38–52%), but stay below v3.3.
+- **See it:** [four versions on the same hub cave](#-four-versions-one-cave).
 - **v3.3 is the best version with and without the cue.** Paired on the same caves (cue and blind, d = 0.5) it beats
   round-2 retention 50 caves to 11 (p < 10⁻⁶) and its memoryless twin 22 to 7 (p = 0.008).
 
