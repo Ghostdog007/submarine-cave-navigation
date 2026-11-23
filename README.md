@@ -22,7 +22,7 @@ controllers and a map-aware oracle on held-out caves.
 > | M v3.1: reward that prices forgetting | trained and tested: **no gain for memory** (exit 70.7%, no memory 72.0%); it made both explore untried exits more |
 > | M v3.2: event-triggered per-exit memory gate + belief bias | trained and tested: **memory is used selectively** (gate 0.83 at known dead ends vs 0.40 at fresh junctions) and known dead ends are avoided most of any model (61–70%), but success did not rise (66.7% standard, 48–55% rings / hub) |
 > | M memory caves (`rings`, `hub`) + wall-follower baselines | built: the old caves turned out **solvable without memory**; on the new ones every reactive rule fails (greedy 5%, wall following 37–42%, oracle 100%) and v3 exit memory re-enters dead ends ~25% less than no memory. 148/148 tests pass |
-> | **M v3.3: v3.2 trained on the memory caves (+ a memoryless control)** | **training** (started 23 Nov 02:40) with v3.2's training settings; evaluation and rings / hub videos follow automatically |
+> | **M v3.3: v3.2 trained on the memory caves (+ a memoryless control)** | **First significant memory win.** On unseen rings / hub caves: 71.7% vs 58.3% for the control with the cue, 68.3% vs 56.7% blind, ~20–30% fewer dead-end re-entries; paired over the same caves 22 wins to 7 (sign test p = 0.008). Also the best v3 model on the old caves (74.7% standard). [Results](#v33-results-23-nov-2026) |
 > | Training speed-up | memory reads as batched matmuls: same outputs, learner ~2× faster. The GPU was measured *slower* for this tiny step-by-step model |
 
 ![game-style renderer](docs/figures/game_renderer_drive.png)
@@ -130,7 +130,7 @@ design is meant to fix that.
 | **Memory caves** | `rings` (start inside two rings: both walls are islands) and `hub` (one chamber, dead-end spokes pointing at the exit) | Every reactive rule collapses (greedy 5%, wall following 37–42%, oracle 100%). **First real memory signal:** v3 exit memory re-enters dead ends ~25% less than its memoryless twin |
 | **v3.2** | Event-triggered per-exit memory gate + belief bias + reliance probes | **Breakthroughs below.** Memory is used *when it matters* and known dead ends are avoided most of any model, but success did not rise: its training caves still did not reward memory, so RL pruned it |
 | **Speed** | Profiling | The memory model was per-op-overhead bound, not simulation-bound. Batched matmul reads: same outputs, learner ~2× faster. GPU measured slower for this tiny model |
-| **v3.3** | v3.2 trained on rings and hub, with v3.2's exact training settings, and a memoryless control trained identically | **Training** (started 23 Nov 02:40) |
+| **v3.3** | v3.2 trained on rings and hub, with v3.2's exact training settings, and a memoryless control trained identically | **Memory finally wins:** +13 points over its memoryless twin on rings / hub with the cue, +12 blind, fewer dead-end re-entries, p = 0.008. The architecture was fine; it needed caves where remembering pays |
 
 **v3.2 breakthroughs:**
 1. **The memory gate finally moves, and selectively.** The old single gate never moved: it was a redundant scale
@@ -346,6 +346,43 @@ the memory instead of pruning it, and does exit memory beat its memoryless twin 
   and without the goal cue), the reliance probes staying high at known dead ends through training instead of
   falling to ~7%, and no loss on the old cave types. The oracle (100%) is the ceiling; "clearly better than its
   memoryless twin" is the bar.
+
+#### v3.3 results (23 Nov 2026)
+
+Training (success in the last stage window): exit 66 / 68 / 51% over stages 1–3, control 79 / 66 / 50%. The exit
+model trains at ~30 decisions/s against ~55/s for the control (3.1 h vs 1.4 h in all, warm start included).
+
+**Rings and hub** (30 unseen caves each):
+
+| | With cue: rings / hub / **both** | Blind: **both** | Dead-end re-entries per dive (cue / blind) | Known dead end avoided (cue / blind) |
+|---|---|---|---|---|
+| **v3.3 exit memory** (`memnav_cc_exit`) | 67% / 77% / **71.7%** | **68.3%** | **1.10 / 1.02** | **73% / 69%** |
+| v3.3 control, no memory (`memnav_cc_none`) | 53% / 63% / 58.3% | 56.7% | 1.35 / 1.45 | 61% / 62% |
+| v3.2 event gate (not trained on these caves) | 43% / 53% / 48.3% | 55.0% | 1.22 / 1.62 | 70% / 70% |
+| v3 exit memory | 57% / 60% / 58.3% | 56.7% | 1.32 / 1.22 | 45% / 37% |
+| Wall-left / greedy / oracle (cue) | 41.7% / 5.0% / 100% | | | |
+
+- **+13 points with the cue, +12 blind** over the twin that differs only in memory, and the best learned model on
+  rings / hub so far (~10 points above every earlier version).
+- **Paired on the same caves** (cue and blind, 120 pairs): exit succeeds where the control fails 22 times, the
+  reverse 7 times; two-sided sign test **p = 0.008**.
+- Dead-end re-entries **−19% with the cue, −30% blind**.
+
+**The old caves** (with cue): no loss, the best v3 model so far.
+
+| | 5 standard types | All 7 | Dead-end re-entries |
+|---|---|---|---|
+| **v3.3 exit memory** | **74.7%** | **77.6%** | 0.63 |
+| v3.3 control | 70.0% | 72.9% | 0.69 |
+| v3 exit / v3.1 no memory | 72.7% / 72.0% | 75.7% / 76.7% | 0.55 / 0.57 |
+| Greedy | 82.0% | 80.5% | 0.58 |
+
+**Weak spot:** blind on the old maze / decoy / loops caves, 68.9% against the control's 72.2% (small, not
+significant). Greedy still leads on the old caves, where following the bearing is enough.
+
+**What it shows:** v3.2's event gate and belief bias were the right architecture; what memory lacked was training
+caves where forgetting costs. (A first v3.3 attempt with faster training settings reached only 36.7% on rings / hub;
+those settings, not the caves, were the problem, and were dropped.)
 
 **Comparison videos** (`videos/10_memory_caves_clean`; rings and hub, blind dives), six navigators side by side:
 
