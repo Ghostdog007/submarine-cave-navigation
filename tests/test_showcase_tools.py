@@ -142,3 +142,31 @@ def test_vertical_stack_and_speed_up(monkeypatch, capsys, tmp_path):
     size, ms = duration_ms(out)
     assert size == (W, 2 * H)
     assert abs(ms - 1000) <= 100                         # 2 s of video at 2x speed
+
+
+def test_mp4_grid_with_labels(monkeypatch, capsys, tmp_path):
+    clips = [make_clip(tmp_path / f"{i}.mp4", 1 + i * 0.5, c)
+             for i, c in enumerate([(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0)])]
+    out = tmp_path / "grid.mp4"
+    monkeypatch.setattr(sys, "argv", ["make_preview", *clips, "--grid", "2", "--labels", "a", "b", "c", "d",
+                                      "--label-height", "16", "--width", "64", "--fps", "10", "--duration", "2",
+                                      "--out", str(out)])
+    make_preview.main()
+    capsys.readouterr()
+    r = imageio.get_reader(str(out))
+    frames = [f for f in r]
+    assert frames[0].shape == (2 * (H + 16), 2 * W, 3)      # 2x2 panels, each with a 16 px label bar on top
+    assert abs(len(frames) - 20) <= 1                        # 2 s at 10 fps, though the first clip lasts 1 s
+    top = frames[0][:16, :W].astype(float)
+    assert top[:3, :3].mean() < 40                           # dark label bar (corner) ...
+    assert top.max() > 200                                   # ... with light text in it
+    last = frames[-1].astype(float)
+    assert last[16:16 + H, :W, 0].mean() > 150               # top-left panel: red clip held on its last frame
+
+
+def test_make_preview_rejects_bad_labels_and_formats(monkeypatch, tmp_path):
+    clip = make_clip(tmp_path / "a.mp4", 1, (255, 0, 0))
+    for extra in (["--labels", "a", "b", "--out", str(tmp_path / "x.mp4")], ["--out", str(tmp_path / "x.gif")]):
+        monkeypatch.setattr(sys, "argv", ["make_preview", clip, "--duration", "1", *extra])
+        with pytest.raises(SystemExit):
+            make_preview.main()

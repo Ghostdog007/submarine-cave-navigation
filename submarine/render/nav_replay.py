@@ -306,6 +306,9 @@ def _probs(nav, obs):
         if hasattr(m, "step"):                             # exit-memory navigator (memory-v3)
             logits, _, _, _ = m.step(ot, nav.state.clone(), nav.start)
             return th.softmax(logits[0], -1).numpy()
+        from submarine.navigator import OBS_DIM
+
+        ot = ot[:, :OBS_DIM]                               # round 1/2 SB3 models: no AUX labels in their input
         if nav.recurrent:
             st = nav.state
             if st is None:

@@ -22,3 +22,11 @@ with its outcome; clips not listed below were deleted and can be re-recorded fro
 | | `hub_cave1000000_memnav_cc_exit_blind`, `hub_cave1000000_memnav_cc_none_blind` | ⭐ **v3.3:** the memory model leaves the hub in 82.2 s; its memoryless twin times out |
 
 Stage 07 (round-1 navigators) was removed entirely: round 2 replays the same maze cave with the fixed navigators.
+
+## 11_versions_hub and post/
+
+- `11_versions_hub/`: hub cave 1000000 (blind) with round-2 retention (times out), v3 exit memory (times out: it
+  enters a passage "despite dead-end belief 89%") and v3.2 (exits at 83.6 s); v3.3 is in `10_memory_caves_clean`.
+- `post/`: post-ready MP4s made with `scripts.make_preview` (H.264, label bars):
+  `1_memory_vs_no_memory_rings.mp4` (v3.3 vs its memoryless twin, 17.5 s), `2_versions_hub.mp4` (round 2 → v3 →
+  v3.2 → v3.3 in a 2×2 grid, 22.5 s), `3_what_it_thinks_hub.mp4` (v3.3 alone, 2× real time, 14 s).
