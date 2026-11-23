@@ -1,4 +1,4 @@
-"""Simplified submarine dynamics (context.md, section 3).
+"""Simplified submarine dynamics (docs/context.md, section 3).
 
 Surge with linear drag, first-order yaw-rate lag, constant water current.
 Angles are in radians, counter-clockwise from +x (the world y axis points up).

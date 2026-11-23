@@ -2,7 +2,7 @@
 
 `WorldConfig` holds fixed map / vehicle geometry. `CaveConfig` holds the
 generator parameters; `CaveConfig.from_difficulty(d)` maps the difficulty knob
-d in [0, 1] onto them (see context.md, section 2).
+d in [0, 1] onto them (see docs/context.md, section 2).
 """
 
 from __future__ import annotations

@@ -7,12 +7,16 @@ where it has already been.**
 ![PyTorch](https://img.shields.io/badge/PyTorch-RL-EE4C2C)
 ![Gymnasium](https://img.shields.io/badge/Gymnasium-env-0081A5)
 ![Stable-Baselines3](https://img.shields.io/badge/SB3-PPO-6A5ACD)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-![Same cave, same moment: the memory model (left) is 6.9 m from the exit; its memoryless twin (right) has gone back round the ring, 18.9 m away](docs/figures/v33_memory_vs_control_rings.jpg)
+**[Demos](#demos)** · **[Results](#results)** · **[How it works](#how-it-works)** · **[Getting started](#getting-started)** ·
+**[Workflow](#workflow)** · **[Documentation](docs/README.md)**
 
-<sub>**Same cave, same moment (56 s into a blind dive).** Left: the v3.3 memory model has stored seven junctions,
-recognised the ring it already went round, and is heading out of the exit, 6.9 m away. Right: its memoryless
-twin, trained identically, has turned back onto the outer ring, 18.9 m from the exit. It times out.</sub>
+![v3.3 memory (left) escapes the rings; its memoryless twin (right) goes back round and times out](docs/media/v33_rings.webp)
+
+<sub>**Blind dive, same cave, side by side** (4× speed). Left: the v3.3 memory model stores each junction it leaves,
+recognises the ring it has already been round, and gets out in 61 s, as fast as the oracle. Right: its memoryless
+twin, trained identically, goes back round the ring and times out.</sub>
 
 ---
 
@@ -27,6 +31,62 @@ twin, trained identically, has turned back onto the outer ring, 18.9 m from the 
   Over the same caves it wins 22 head-to-heads to 7 (**p = 0.008**).
 - 🔬 **The lesson:** getting there took two navigator rounds and four memory versions. The architecture was fine by v3.2; what was missing
   was **caves where forgetting actually costs something**.
+
+## Demos
+
+Replays show the sonar, stored memories, recalled entries, the memory gate and the agent's beliefs live. The
+rings dive is at the top of this page; more below. Previews are compressed, sped-up excerpts (4× real time, 8× for
+the round-2 maze) made with `scripts.make_preview`. The full-quality `.mp4` files are git-ignored; see
+[videos/](videos) for the curated clips and the [workflow](docs/workflow.md#8-record-the-comparison-videos) for how
+to record them.
+
+### ⭐ v3.3: memory finds the way out of the hub
+
+**Left:** v3.3 exit memory. **Right:** its memoryless twin. Most spokes of the chamber are dead ends pointing at the
+exit, and every one leads back to a chamber that looks the same. The memory model gets out in 82 s; the twin, v3
+and the wall follower all time out.
+
+![v3.3 memory vs its memoryless twin on a hub cave](docs/media/v33_hub.webp)
+
+### v3: the decoy that traps greedy
+
+**Left:** v3 exit memory. **Right:** greedy (always follow the goal bearing). A side passage points straight at the
+exit and ends blind. Greedy keeps being pulled back into it; the memory navigator exits in 58 s.
+
+![v3 exit memory vs greedy on a decoy cave](docs/media/v3_decoy.webp)
+
+### Round 2: retention memory solves the maze
+
+**Left:** the retention-memory navigator. **Right:** the same navigator without memory. Retention memory is the only
+learned navigator to get out of this maze (144 s); without memory it times out.
+
+![retention memory vs no memory in a maze](docs/media/round2_maze.webp)
+
+### Two senses beat one in murky water
+
+<img src="docs/media/sensors_murky.webp" alt="sonar only, camera only, and sonar plus camera in thick silt" width="400" align="right">
+
+The same hard, murky cave, three agents, top to bottom:
+- **sonar only** misses the narrow exit, detours round a pillar and crashes (24.2 s);
+- **camera only** crashes in thick silt (19.6 s);
+- **sonar + camera** reaches the exit (34.5 s).
+
+Fused, the agent succeeds on 86% of the hardest murky caves, against 64% with either sense alone.
+
+<br clear="right">
+
+### PPO clears a hardest-level cave
+
+Follow camera on the PPO agent trained with a difficulty curriculum: through the hardest cave level in 42 s, with
+the minimap and the sonar's view of the walls.
+
+![PPO with follow camera clearing a hardest-level cave](docs/media/ppo_follow_cam.webp)
+
+### The game-style renderer
+
+Ice theme, follow camera, minimap, headlight, caustics, bubbles and sonar pings (the oracle driving).
+
+![game-style renderer, ice theme](docs/media/game_renderer.webp)
 
 ## The journey
 
@@ -51,7 +111,7 @@ Each step asked one question. The answers, good and bad, shaped the next one.
 Every milestone is a git tag (`phase-b-round1`, `phase-b-round2`, `v3`, `v3.1`, `v3.2`, `v3.3`):
 `git checkout v3.2` brings back that exact version.
 
-## Headline results
+## Results
 
 ### Driving: learning to get through
 
@@ -96,7 +156,7 @@ Two cave types designed so that no reactive rule works:
 On the old cave types it lost nothing: **74.7%**, the best v3 model there (its twin 70.0%; greedy 82.0% still
 leads, because on those caves following the goal bearing is enough).
 
-## How the agent works
+## How it works
 
 ```
             +---------------- NAVIGATOR (learned, decides rarely) -------------+
@@ -167,68 +227,6 @@ the bearing is enough.
 Full lab notebook, with every table: [docs/memory_v3.md](docs/memory_v3.md).
 </details>
 
-## Watch it
-
-Replays show the sonar, stored memories, recalled entries, the memory gate and the agent's beliefs live. The
-previews below are compressed, sped-up excerpts (4× real time, 8× for the round-2 maze). The full-quality `.mp4`
-files are git-ignored: regenerate them with `scripts.record` / `scripts.compare_videos` (see [videos/](videos)).
-
-### ⭐ v3.3: memory escapes the rings
-
-**Left:** v3.3 exit memory. **Right:** its memoryless twin, trained identically. Blind dive, no goal bearing. The
-memory model stores each junction it leaves, recognises the ring it has already been round, and gets out in 61 s,
-as fast as the oracle. The twin goes back round the ring and times out.
-
-![v3.3 memory vs its memoryless twin on a rings cave](docs/media/v33_rings.webp)
-
-### ⭐ v3.3: memory finds the way out of the hub
-
-**Left:** v3.3 exit memory. **Right:** its memoryless twin. Most spokes of the chamber are dead ends pointing at the
-exit, and every one leads back to a chamber that looks the same. The memory model gets out in 82 s; the twin, v3
-and the wall follower all time out.
-
-![v3.3 memory vs its memoryless twin on a hub cave](docs/media/v33_hub.webp)
-
-### v3: the decoy that traps greedy
-
-**Left:** v3 exit memory. **Right:** greedy (always follow the goal bearing). A side passage points straight at the
-exit and ends blind. Greedy keeps being pulled back into it; the memory navigator exits in 58 s.
-
-![v3 exit memory vs greedy on a decoy cave](docs/media/v3_decoy.webp)
-
-### Round 2: retention memory solves the maze
-
-**Left:** the retention-memory navigator. **Right:** the same navigator without memory. Retention memory is the only
-learned navigator to get out of this maze (144 s); without memory it times out.
-
-![retention memory vs no memory in a maze](docs/media/round2_maze.webp)
-
-### Two senses beat one in murky water
-
-<img src="docs/media/sensors_murky.webp" alt="sonar only, camera only, and sonar plus camera in thick silt" width="400" align="right">
-
-The same hard, murky cave, three agents, top to bottom:
-- **sonar only** misses the narrow exit, detours round a pillar and crashes (24.2 s);
-- **camera only** crashes in thick silt (19.6 s);
-- **sonar + camera** reaches the exit (34.5 s).
-
-Fused, the agent succeeds on 86% of the hardest murky caves, against 64% with either sense alone.
-
-<br clear="right">
-
-### PPO clears a hardest-level cave
-
-Follow camera on the PPO agent trained with a difficulty curriculum: through the hardest cave level in 42 s, with
-the minimap and the sonar's view of the walls.
-
-![PPO with follow camera clearing a hardest-level cave](docs/media/ppo_follow_cam.webp)
-
-### The game-style renderer
-
-Ice theme, follow camera, minimap, headlight, caustics, bubbles and sonar pings (the oracle driving).
-
-![game-style renderer, ice theme](docs/media/game_renderer.webp)
-
 ## Scenarios
 
 | Scenario | Real-world analogue | What the agent must do |
@@ -244,7 +242,7 @@ Ice theme, follow camera, minimap, headlight, caustics, bubbles and sonar pings 
 | Sonar or camera failure | equipment fault | stop, wait, creep slowly, abort if blind too long |
 | No goal cue | exploring for an unknown exit | explore systematically without re-exploring |
 
-## Try it
+## Getting started
 
 Requires Windows or Linux and Python 3.12. A GPU is optional: these networks train faster on the CPU.
 
@@ -260,6 +258,8 @@ python -m scripts.drive --difficulty 0.5 --theme rock --camera full
 # look at the cave types
 python -m scripts.plot_scenarios                            # -> docs/figures/scenario_catalogue.png
 ```
+
+For the full loop (demos → training → evaluation → videos), see [Workflow](#workflow).
 
 **Reproduce v3.3** (about 3 h for the memory model, 1.5 h for its twin, on CPU):
 
@@ -289,6 +289,27 @@ python -m scripts.record --policies gap --models runs/archive/ppo_mlp_mixed_s0 -
 python -m scripts.record --models runs/archive/ppo_mlp_mixed_s0 --difficulties 1.0 --camera follow --format gif
 ```
 </details>
+
+## Workflow
+
+Every experiment here follows the same loop, each step a script:
+
+```
+ config ─► smoke test ─► teacher demos ─► train model + control ─► monitor
+                                                                     │
+ document + tag ◄─ README preview ◄─ record videos ◄─ pick caves ◄─ evaluate
+```
+
+| Step | Command | Output |
+|---|---|---|
+| Train | `python -m scripts.train_memnav --config configs/<cfg>.yaml --variant exit` (and `none`) | `runs/<prefix>_<variant>/` |
+| Monitor | `python -m scripts.watch_training runs/<run> ...` | live table, TensorBoard in `runs/<run>/tb` |
+| Evaluate | `python -m scripts.eval_navigator --models runs/<run> ... --layouts rings hub --name <name>` | `runs/eval/<name>_episodes.csv` |
+| Pick caves | `python -m scripts.pick_showcase --csv ... --winner <run> --losers <control>` | `layout:seed` pairs |
+| Record | `python -m scripts.compare_videos --navigators runs/<run> ... --extra <layout:seed> --out videos/NN_<topic>` | side-by-side `.mp4` + README table |
+| Preview | `python -m scripts.make_preview <a>.mp4 <b>.mp4 --duration 18 --out docs/media/<name>.webp` | WebP for the README |
+
+**Step-by-step guide with every option, conventions and pitfalls: [docs/workflow.md](docs/workflow.md).**
 
 ## Under the hood
 
@@ -346,10 +367,11 @@ submarine/
   baselines/   random, gap follower, wall centering, oracle planner
   evaluation/  metrics, dead-end analysis, parallel evaluation
   render/      game-style viewer, art, replay videos with memory overlays
-scripts/       drive, evaluate, train, train_memnav, eval_navigator, collect_nav_demos, record, compare_videos, ...
+scripts/       train_*, collect_nav_demos, eval_navigator, pick_showcase, compare_videos, make_preview,
+               drive, evaluate, record, watch_training, plot_*, ...
 configs/       YAML configs (memnav_caves_clean.yaml = v3.3)
 tests/         pytest suite
-docs/          memory_v3.md (memory lab notebook), figures/, results/
+docs/          workflow, design, development log, memory lab notebook; figures/, media/ (README previews)
 videos/        curated replay clips by stage (git-ignored)
 runs/          training runs and evaluations (git-ignored)
 ```
@@ -381,10 +403,17 @@ runs/          training runs and evaluations (git-ignored)
   replays reproduce the evaluation numbers exactly.
 </details>
 
-## Read more
+## Documentation
 
-- 📐 [context.md](context.md): the design document: goals, world, vehicle, sensors, reward, research questions.
-- 📓 [progress.md](progress.md): development log and results, stage by stage.
-- 🧠 [docs/memory_v3.md](docs/memory_v3.md): the memory lab notebook, v3 → v3.3, with every table.
-- 🎬 [scenarios.md](scenarios.md): the progression told through one example dive.
-- 🎥 [videos/](videos): replay clips by stage.
+| | |
+|---|---|
+| 🛠️ [Workflow](docs/workflow.md) | how an experiment goes from config to video, step by step |
+| 📐 [Design](docs/context.md) | goals, world, vehicle, sensors, reward, research questions |
+| 📓 [Development log](docs/progress.md) | every stage, with results and figures |
+| 🧠 [Memory lab notebook](docs/memory_v3.md) | v3 → v3.3, every experiment and table, including what failed |
+| 🎬 [Scenarios](docs/scenarios.md) | the progression told through one example dive |
+| 🎥 [Videos](videos/README.md) | the curated replay clips |
+
+## License
+
+[MIT](LICENSE)

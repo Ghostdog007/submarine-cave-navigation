@@ -1,4 +1,4 @@
-"""Multi-beam sonar by ray marching on the occupancy grid (context.md, section 4.1)."""
+"""Multi-beam sonar by ray marching on the occupancy grid (docs/context.md, section 4.1)."""
 
 from __future__ import annotations
 

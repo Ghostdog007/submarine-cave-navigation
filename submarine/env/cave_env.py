@@ -1,4 +1,4 @@
-"""Gymnasium environment for 2D submarine cave navigation (context.md, sections 5 and 6).
+"""Gymnasium environment for 2D submarine cave navigation (docs/context.md, sections 5 and 6).
 
 Observation (float32), in this order:
     sonar ranges / max_range            n_beams values in [0, 1]

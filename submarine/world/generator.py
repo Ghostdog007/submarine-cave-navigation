@@ -1,4 +1,4 @@
-"""Procedural 2D cave generator (context.md, section 2).
+"""Procedural 2D cave generator (docs/context.md, section 2).
 
 Grid convention: arrays are indexed [iy, ix] with shape (ny, nx). Cell (iy, ix)
 has its centre at world coordinates ((ix + 0.5) * res, (iy + 0.5) * res).

@@ -7,7 +7,7 @@ The full lab notebook of the memory work (v3 → v3.3, 22–23 Nov 2026), merged
 
 ## Why a third design
 
-Round 1 (`main`, stage 9 phase B in [progress.md](../progress.md)) trained three navigators: none, retention,
+Round 1 (`main`, stage 9 phase B in [progress.md](progress.md)) trained three navigators: none, retention,
 and retention + junction memory. The memory versions were *worse* (69–72% success vs 82%). The replays showed
 why:
 
@@ -438,7 +438,7 @@ caves are the hardest ones the oracle solves (a stress test); the last two were 
 
 Watch `rings_cave1000008_*` (only the v3.3 memory model and the oracle get out, equally fast) and
 `hub_cave1000000_*` (the memoryless control, v3 and the wall follower all time out). The full per-video table is
-in [videos/10_memory_caves_clean/README.md](videos/10_memory_caves_clean/README.md); the `.mp4` files (1.1 GB) are
+in [videos/10_memory_caves_clean/README.md](../videos/10_memory_caves_clean/README.md); the `.mp4` files (1.1 GB) are
 git-ignored like all replays and are regenerated with the command below.
 
 ```powershell

@@ -1,7 +1,7 @@
 # Progress log
 
 How the environment, the agents and the tooling evolved, stage by stage, with the measured results.
-Design goals and the original plan are in [context.md](context.md); how to run everything is in [README.md](README.md);
+Design goals and the original plan are in [context.md](context.md); how to run everything is in [README.md](../README.md);
 the same story told through one example dive is in [scenarios.md](scenarios.md).
 
 All success rates below are on **held-out test caves** (seeds ≥ 1,000,000) never seen in training,
@@ -10,12 +10,12 @@ All success rates below are on **held-out test caves** (seeds ≥ 1,000,000) nev
 | Stage | What was added | Headline result | Videos |
 |---|---|---|---|
 | 0 | Python 3.12 venv, CUDA PyTorch | – | – |
-| 1 | Cave generator, vehicle, sonar, Gymnasium env, baselines, evaluation | Gap follower 80% overall, **34% at d = 1**; oracle 100% | [01](videos/01_classical_baselines) |
-| 2 | PPO trained on easy caves only (d = 0) | 94% on easy caves, **31% overall**: never learned to avoid obstacles | [02](videos/02_ppo_trained_on_easy_caves) |
-| 3 | PPO trained on mixed difficulty | **94% overall, 82% at d = 1**, faster than the oracle | [03](videos/03_ppo_mixed_difficulty) |
-| 4 | Replay videos, game-style renderer | – | [04](videos/04_game_renderer) |
-| 5 | Camera model, murky water, realistic sonar | **Fused sonar + camera 93%** (86% at d = 1) vs sonar-only 88%, camera-only 84%; but no sonar fallback if the camera dies | [05](videos/05_camera_and_murky_water) |
-| 6 | Test scenarios from real cave exploration (maze, dead-end branches, crevasse, boulder choke, silt-out); energy metric and penalty | Best memoryless PPO: maze **5%**, crack 70%, breakdown 60% (oracle 95–100%) | [06](videos/06_test_scenarios) |
+| 1 | Cave generator, vehicle, sonar, Gymnasium env, baselines, evaluation | Gap follower 80% overall, **34% at d = 1**; oracle 100% | [01](../videos/01_classical_baselines) |
+| 2 | PPO trained on easy caves only (d = 0) | 94% on easy caves, **31% overall**: never learned to avoid obstacles | [02](../videos/02_ppo_trained_on_easy_caves) |
+| 3 | PPO trained on mixed difficulty | **94% overall, 82% at d = 1**, faster than the oracle | [03](../videos/03_ppo_mixed_difficulty) |
+| 4 | Replay videos, game-style renderer | – | [04](../videos/04_game_renderer) |
+| 5 | Camera model, murky water, realistic sonar | **Fused sonar + camera 93%** (86% at d = 1) vs sonar-only 88%, camera-only 84%; but no sonar fallback if the camera dies | [05](../videos/05_camera_and_murky_water) |
+| 6 | Test scenarios from real cave exploration (maze, dead-end branches, crevasse, boulder choke, silt-out); energy metric and penalty | Best memoryless PPO: maze **5%**, crack 70%, breakdown 60% (oracle 95–100%) | [06](../videos/06_test_scenarios) |
 | 7 | Retention memory (decaying attention, no LSTM) on mixed layouts | *training in progress* | – |
 | 8 | Sensor-failure robustness + memory (planned) | – | – |
 | – | Faster, memory-light training infrastructure | 11× faster retention updates, 2.4× faster validation, workers 1.5 GB → 58 MB | – |
@@ -39,7 +39,7 @@ All success rates below are on **held-out test caves** (seeds ≥ 1,000,000) nev
   (< 3% error vs true path length). Solvability check with regeneration from sub-seeds.
 - Train / validation / test seeds in disjoint ranges (0+, 500,000+, 1,000,000+).
 
-![caves](docs/figures/caves_by_difficulty.png)
+![caves](figures/caves_by_difficulty.png)
 
 **Bug found:** 86% of d = 1 caves needed regeneration (260 ms per cave). A stage-by-stage diagnosis showed
 pillars caused every failure: they were placed in 3 m passages where roughness then closed the gap.
@@ -74,7 +74,7 @@ leaving room for learning.
    because its direction choice and speed control used different openness tests, and (b) turned back toward the
    start in wide chambers. Both now use the same vehicle-width corridor test, and the goal direction weighs more.
 
-![timeouts](docs/figures/stage1_gap_follower_timeouts_debug.png)
+![timeouts](figures/stage1_gap_follower_timeouts_debug.png)
 
 ## Stage 2: PPO on easy caves only
 
@@ -89,7 +89,7 @@ leaving room for learning.
 **Diagnosis:** d = 0 caves are wide and nearly straight, so "follow the goal bearing at full speed" works there.
 The agent never learned to use the sonar; every failure on harder caves was a collision, almost no timeouts.
 
-![stage2](docs/figures/stage2_ppo_easy_only_paths.png)
+![stage2](figures/stage2_ppo_easy_only_paths.png)
 
 ## Stage 3: PPO on mixed difficulty
 
@@ -112,7 +112,7 @@ Changes (reward and network unchanged, so the training distribution is the only 
 - The final model looks better on d = 1 test caves, but choosing it *because* of test results would be test-set
   tuning; the validation-selected checkpoint is the reported one.
 
-![stage3](docs/figures/stage3_ppo_mixed_paths.png)
+![stage3](figures/stage3_ppo_mixed_paths.png)
 
 ## Stage 4: Visualization
 
@@ -123,7 +123,7 @@ Changes (reward and network unchanged, so the training distribution is the only 
   submarine sprite, sonar pings, EXIT beacon, **follow camera with minimap**. The flat analysis view remains
   (`--style plain`). Rendering only: the simulation is identical in every style.
 
-![renderer](docs/figures/game_renderer_drive.png)
+![renderer](figures/game_renderer_drive.png)
 
 ## Stage 5: Camera, murky water and realistic sonar
 
@@ -154,9 +154,9 @@ Changes (reward and network unchanged, so the training distribution is the only 
 
 | Inside a murky patch (turbidity 0.61) | Back in clear water (0.10) |
 |---|---|
-| ![inside](docs/figures/murk_follow_inside.png) | ![clear](docs/figures/murk_follow_clear.png) |
+| ![inside](figures/murk_follow_inside.png) | ![clear](figures/murk_follow_clear.png) |
 
-![murk map](docs/figures/murk_full_map.png)
+![murk map](figures/murk_full_map.png)
 
 **Baselines under the new conditions** (30 test caves per difficulty):
 
@@ -189,7 +189,7 @@ Changes (reward and network unchanged, so the training distribution is the only 
 
 **Why the sonar-only agent detoured around the pillar** (cave 1000009, d = 1), checked against its own inputs:
 
-![detour](docs/figures/step1_detour_analysis.png)
+![detour](figures/step1_detour_analysis.png)
 
 1. *The goal bearing pointed into a dead-end pocket.* The chamber's exit is a narrow crack to the north-east; the
    goal lies east-south-east. At the decision point the goal bearing was −23° to +7° while the true route was +25° to
@@ -213,7 +213,7 @@ Planned fix: train with random camera failures so the network must learn to stee
 **New cave layouts** (`cave/layouts.py`, `env.layout`), each modelled on a hazard cave explorers actually face.
 The original tunnel caves are unchanged (all 250 earlier test caves regenerate with exactly 0 difference).
 
-![scenarios](docs/figures/scenario_catalogue.png)
+![scenarios](figures/scenario_catalogue.png)
 
 | Scenario | Real-world situation | Tests |
 |---|---|---|

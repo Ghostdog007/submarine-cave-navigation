@@ -1,4 +1,4 @@
-"""Sensor-only baselines (context.md, section 7): random, gap-following, centering.
+"""Sensor-only baselines (docs/context.md, section 7): random, gap-following, centering.
 
 All of them read only the observation vector, like the RL agent does.
 """

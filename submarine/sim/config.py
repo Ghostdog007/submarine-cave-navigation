@@ -1,4 +1,4 @@
-"""Vehicle and sonar configuration (context.md, sections 3 and 4.1)."""
+"""Vehicle and sonar configuration (docs/context.md, sections 3 and 4.1)."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ class SonarConfig:
 
 @dataclass(frozen=True)
 class CameraConfig:
-    """Forward-looking camera lit by the submarine's headlight (context.md, section 4.4).
+    """Forward-looking camera lit by the submarine's headlight (docs/context.md, section 4.4).
 
     In the 2D world the camera produces a 1D image (one scanline): each pixel
     is the brightness returned along its ray. Brightness falls off with

@@ -3,7 +3,7 @@
 How the environment, the agent's components, its training and the test scenarios changed over the project,
 what each stage was meant to make possible, and what was actually measured. Everything is anchored on one
 running example, **"the dive"**, so the progression is concrete. Detailed numbers are in
-[progress.md](progress.md); videos in [videos/](videos).
+[progress.md](progress.md); videos in [videos/](../videos).
 
 Legend: **measured** = shown on held-out test caves; *hoped / planned* = not yet demonstrated.
 
