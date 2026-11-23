@@ -448,3 +448,39 @@ python -m scripts.train_memnav --config configs/memnav_caves_clean.yaml --varian
 python -m scripts.eval_navigator --config configs/memnav_reward.yaml --layouts rings hub --policies greedy oracle wall-left wall-right --models runs/memnav_cc_none runs/memnav_cc_exit
 python -m scripts.compare_videos --config configs/memnav_caves_clean.yaml --reward-stage m3_full --no-cue --layouts rings hub --navigators runs/memnav_cc_exit runs/memnav_cc_none runs/memnav_e_exit runs/memnav_exit wall-left oracle --csv runs/eval/memcaves_cue_episodes.csv --out videos/10_memory_caves_clean
 ```
+
+## Every version on the memory caves, and harder caves (23 Nov 2026)
+
+**Round-2 navigators on rings / hub** (never evaluated there before; SB3 models, trained always with the goal cue;
+same 30 + 30 test caves, d = 0.5, `configs/memnav_reward.yaml`; runs `r2_mem`, `r2_memblind`):
+
+| Cue: rings / hub / both; blind: both | Cue | Blind | Re-entries (cue / blind) | Avoid (cue / blind) |
+|---|---|---|---|---|
+| Round 2 none | 17% / 13% / 15.0% | 50.0% | 3.10 / 1.52 | 37% / 66% |
+| Round 2 retention | 37% / 10% / 23.3% | 51.7% | 2.62 / 1.40 | 38% / 60% |
+| Round 2 retention + junction | 3% / 13% / 8.3% | 38.3% | 3.37 / 1.55 | 33% / 65% |
+| v3.3 exit (for comparison) | 67% / 77% / 71.7% | 68.3% | 1.10 / 1.02 | 73% / 69% |
+
+With the cue the round-2 navigators follow the bearing into the dead ends like greedy (re-entries 3.17); blind
+they do much better but stay below v3.3. Paired at d = 0.5 (cue + blind): v3.3 exit vs round-2 retention **50 caves
+to 11, p = 5e-7**.
+
+**Harder memory caves** (d = 0.75 and 1.0; runs `hard_d*_{cue,blind}`; 0 collisions in all 1,440 dives):
+
+| | d 0.75 cue | d 0.75 blind | d 1.0 cue | d 1.0 blind |
+|---|---|---|---|---|
+| v3.3 exit | **56.7%** (1.37) | 51.7% (1.38) | **58.3%** (1.42) | **50.0%** (1.50) |
+| v3.3 none | 50.0% (1.55) | **55.0%** (1.62) | 48.3% (1.62) | 48.3% (1.78) |
+| Round-2 retention | 20.0% (3.17) | 51.7% (1.70) | 20.0% (3.00) | 38.3% (1.95) |
+| Wall-left | 35.0% | 35.0% | 40.0% | 40.0% |
+| Greedy | 5.0% | 10.0% | 10.0% | 5.0% |
+| Oracle | 100% | 100% | 100% | 100% |
+
+(Success; dead-end re-entries per dive in brackets.)
+
+- Exit memory keeps the fewest re-entries at every difficulty and beats round-2 retention clearly (77 to 25,
+  p = 2e-7 over the harder runs).
+- Its lead over the memoryless twin shrinks: 41 caves to 32 over the harder runs (p = 0.35, not significant);
+  pooled over d = 0.5, 0.75 and 1.0: 63 to 39, p = 0.02. v3.3 trained on rings / hub up to d = 1.0 (stage m3), so
+  this is not just unseen difficulty: in narrower passages driving and exit detection dominate, and memory is not
+  yet the deciding factor.

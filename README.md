@@ -114,7 +114,7 @@ Each step asked one question. The answers, good and bad, shaped the next one.
 | 🔍 | Diagnosis | Why does memory keep losing? | **The caves never needed it:** a wall follower solves them all |
 | 🕳️ | Memory caves: `rings`, `hub` | Build caves only memory can solve | Every reactive rule collapses: greedy **5%**, wall following 37–42%, oracle 100% |
 | v3.2 | Event-triggered memory gate | Use memory *when it matters*? | ✅ Gate 0.83 at known dead ends vs 0.40 at fresh junctions, but RL still pruned it |
-| **v3.3** | **v3.2 trained on the memory caves** | **Does memory finally pay off?** | ✅ **71.7% vs 58.3%** for its memoryless twin, **p = 0.008** |
+| **v3.3** | **v3.2 trained on the memory caves** | **Does memory finally pay off?** | ✅ **71.7% vs 58.3%** for its memoryless twin (p = 0.008), vs 23.3% for round-2 retention; lead shrinks on harder caves |
 
 Every milestone is a git tag (`phase-b-round1`, `phase-b-round2`, `v3`, `v3.1`, `v3.2`, `v3.3`):
 `git checkout v3.2` brings back that exact version.
@@ -141,7 +141,7 @@ Success on unseen test caves.
 | PPO, sonar only | 88% | 64% |
 | **PPO, sonar + camera** | **93%** | **86%** |
 
-### Remembering: the memory caves (v3.3)
+### Remembering: the memory caves, version by version
 
 Two cave types designed so that no reactive rule works:
 - **`rings`:** the dive starts *inside* two concentric rings of passage. Keep a hand on either wall and you circle
@@ -150,19 +150,46 @@ Two cave types designed so that no reactive rule works:
   ~90°. Every failed spoke returns the sub to the same chamber, which looks the same: only remembering which spokes
   were tried moves it on.
 
-30 unseen caves of each type:
+30 unseen caves of each type, d = 0.5. **Every version on the same caves:**
 
-| | With goal cue | Blind (no cue) | Dead-end re-entries per dive (cue / blind) | Known dead end avoided |
+| Version | With goal cue: rings / hub / **both** | Blind: **both** | Dead-end re-entries per dive (cue / blind) | Known dead end avoided (cue) |
 |---|---|---|---|---|
-| **v3.3 exit memory** | **71.7%** | **68.3%** | **1.10 / 1.02** | **73%** |
-| v3.3 twin, no memory (identical training) | 58.3% | 56.7% | 1.35 / 1.45 | 61% |
-| v3.2 event gate (not trained on these caves) | 48.3% | 55.0% | 1.22 / 1.62 | 70% |
-| v3 exit memory | 58.3% | 56.7% | 1.32 / 1.22 | 45% |
-| Wall follower / greedy | 41.7% / 5.0% | | 2.10 / 3.17 | |
-| Oracle (reads the map) | 100% | | 0.02 | |
+| Round 2: no memory | 17% / 13% / 15.0% | 50.0% | 3.10 / 1.52 | 37% |
+| Round 2: retention memory (best on the standard caves, 88.7%) | 37% / 10% / 23.3% | 51.7% | 2.62 / 1.40 | 38% |
+| Round 2: retention + junction memory | 3% / 13% / 8.3% | 38.3% | 3.37 / 1.55 | 33% |
+| v3 exit memory | 57% / 60% / 58.3% | 56.7% | 1.32 / 1.22 | 45% |
+| v3.1 exit memory | 33% / 33% / 33.3% | 46.7% | 1.50 / 1.68 | 47% |
+| v3.2 event gate (not trained on these caves) | 43% / 53% / 48.3% | 55.0% | 1.22 / 1.62 | 70% |
+| v3.3 twin, no memory (identical training) | 53% / 63% / 58.3% | 56.7% | 1.35 / 1.45 | 61% |
+| **v3.3 exit memory** | **67% / 77% / 71.7%** | **68.3%** | **1.10 / 1.02** | **73%** |
+| Greedy / wall follower / oracle | 0% / 10% / 5.0% · 43% / 40% / 41.7% · 100% | 20.0% / 41.7% / – | 3.17 / 2.10 / 0.02 | |
 
-On the old cave types it lost nothing: **74.7%**, the best v3 model there (its twin 70.0%; greedy 82.0% still
-leads, because on those caves following the goal bearing is enough).
+- **The round-2 navigators walk into the trap.** They always had the goal bearing in training, and here the bearing
+  points at dead ends: with it shown they re-enter dead ends 2.6–3.4 times per dive, like greedy, and solve
+  8–23%. Blind they do better (38–52%), but stay below v3.3.
+- **v3.3 is the best version with and without the cue.** Paired on the same caves (cue and blind, d = 0.5) it beats
+  round-2 retention 50 caves to 11 (p < 10⁻⁶) and its memoryless twin 22 to 7 (p = 0.008).
+
+**Harder caves** (d = 0.75 and 1.0: narrower passages, rougher walls; 30 caves of each type per setting):
+
+| | d = 0.75 cue / blind | d = 1.0 cue / blind | Dead-end re-entries (range) |
+|---|---|---|---|
+| **v3.3 exit memory** | **56.7%** / 51.7% | **58.3% / 50.0%** | **1.37–1.50** |
+| v3.3 twin, no memory | 50.0% / **55.0%** | 48.3% / 48.3% | 1.55–1.78 |
+| Round 2: retention memory | 20.0% / 51.7% | 20.0% / 38.3% | 1.70–3.17 |
+| Wall follower | 35.0% / 35.0% | 40.0% / 40.0% | 2.02–2.05 |
+| Greedy | 5.0% / 10.0% | 10.0% / 5.0% | 2.55–3.63 |
+| Oracle | 100% | 100% | ≤ 0.03 |
+
+- **No crashes:** 0 collisions in all 1,440 harder dives, for every navigator.
+- **Memory still re-enters dead ends least** at every difficulty, and beats round-2 retention clearly (77 caves to 25,
+  p < 10⁻⁶).
+- **But its lead over the twin shrinks** on harder caves: +7 to +10 points with the cue, −3 to +2 blind; 41 caves to
+  32 overall, not significant (p = 0.35). Over all three difficulties together: 63 to 39, p = 0.02. Narrower
+  passages make driving and exit detection harder for both, so memory is not yet the deciding factor there.
+
+On the old cave types it lost nothing: **74.7%**, the best v3 model there (its twin 70.0%). Greedy (82.0%) and
+round-2 retention (88.7%) still lead on those caves, where following the goal bearing is enough.
 
 ## How it works
 
@@ -228,7 +255,8 @@ GTrXL, Memory Maze); [docs/memory_v3.md](docs/memory_v3.md) gives the reasoning 
    won: **+13 points** over its twin, p = 0.008. One detour on the way: a faster training setup reached only
    36.7%, so it was dropped and v3.3 kept v3.2's exact settings.
 
-**Still open:** the hardest rings / hub caves defeat every learned model, blind on the old maze / decoy / loops
+**Still open:** on harder memory caves (d = 0.75–1.0) the lead over the twin shrinks to a non-significant one, the hardest
+rings / hub caves defeat every learned model, blind on the old maze / decoy / loops
 caves the twin is slightly ahead (72.2% vs 68.9%, not significant), and greedy still wins on caves where following
 the bearing is enough.
 
