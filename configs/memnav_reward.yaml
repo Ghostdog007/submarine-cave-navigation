@@ -1,0 +1,103 @@
+# memory-v3.1: the same exit-memory navigators, trained with a reward that PRICES forgetting.
+#   python -m scripts.collect_nav_demos --config configs/memnav_reward.yaml   # new demos: fixed labels (~10 min)
+#   python -m scripts.train_memnav --config configs/memnav_reward.yaml --variant exit   (and none: the control)
+# Runs land in runs/memnav_r_<variant> (run_prefix), next to the v3 runs.
+#
+# Why (docs/memory_v3.md, "Why memory went unused"): with dense geodesic progress, a dead-end detour is refunded on
+# the way out and costs only its time and energy (~5 reward vs ~+57 for a success), the map flags a wrong branch
+# the moment it is entered, and 70% of dives showed the goal bearing. A memoryless policy collected nearly all the
+# reward, so the memory gate never opened (0.17). Changes, all from stage 2 on (stage 1 keeps the dense reward to
+# learn the basics fast):
+#   progress: record             paid only for beating the best geodesic so far: no entry signal, no refund
+#   repeat_dead_penalty: 1.5     choosing an exit that already led to a dead end (a detour itself costs ~5)
+#   repeat_taken_penalty: 0.3    re-taking an exit already taken from here while an untried one exists HERE
+#   (both small nudges, forward exits only: turning back / driving back through explored tunnels to a far
+#    junction is never penalised; reaching new ground there pays the exploration bonus)
+#   dead_end_revisit_penalty: 1.5  back at the tip of a dead end already reached and left (>= 4 m): re-entry by any
+#                                  route, incl. turning back in its corridor (v3 models: 0.55 re-entries per dive,
+#                                  the same as greedy; corridors have no junction, so the exit penalty misses it)
+#   dither_penalty: 0.3          turning back again within 2 decisions, no junction in between (the U-turn loop)
+#   explore_bonus: 0.5           per new 2 m cell, only in dives without the goal cue
+#   goal 20 -> 40, k_time 0.01 -> 0.02 per step: a timeout is clearly worse than finishing
+#   goal_cue_prob 0.7 -> 0.3
+# Also: labels fixed (a departure counts as "taken" only after the sub has come back; a dead end belongs to the
+# departure that led straight to it), memory gate starts at 0.5 instead of 0.12.
+seed: 0
+run_prefix: memnav_r
+n_envs: 30
+envs_per_worker: 6
+model:
+  d_model: 64
+  gru: 64
+  n_entries: 32
+  memo: 16
+  hidden: 64
+  merge_radius: 1.5
+  sigma: 2.0
+  ray_length: 14.0
+  gate_init: 0.0                  # memory gate starts at 0.5 (v3: -2.0 = 0.12, stayed nearly closed)
+
+ppo:
+  n_steps: 64
+  epochs: 4
+  minibatch_envs: 8
+  lr: 3.0e-4
+  gamma: 0.99
+  lam: 0.95
+  clip: 0.2
+  ent: 0.01
+  vf: 0.5
+  aux_start: 0.5
+  aux_end: 0.1
+  max_grad: 0.5
+  target_kl: 0.03
+
+bc:
+  demos: runs/memnav_r_demos.npz  # re-collected: the v3 demos carry the old (flawed) labels
+  decisions: 60000
+  noise: 0.1
+  junction_noise: 0.35
+  epochs: 10
+  lanes: 8
+  seq_len: 64
+  lr: 1.0e-3
+  vf_coef: 0.05
+  aux_weight: 0.5
+
+base:
+  driver_actor: runs/driver/driver.npz
+  cruise_speed: 1.2
+  empty_slot: remap
+  aux_labels: true
+  goal_cue_prob: 1.0
+  env:
+    max_steps: 1500
+    sonar: {ping_interval: 0.4}
+    reward: {k_energy: 1.0}
+
+memory_reward: &memory_reward     # stages 2-3
+  progress: record
+  repeat_dead_penalty: 1.5
+  repeat_taken_penalty: 0.3
+  dead_end_revisit_penalty: 1.5
+  dither_penalty: 0.3
+  explore_bonus: 0.5
+  explore_cell: 2.0
+  explore_without_cue_only: true
+  goal_cue_prob: 0.3
+
+stages:
+  - name: m1_core                 # dense reward, goal cue always: the basics
+    steps: 60000
+    goal_cue_prob: 1.0
+    env: {layout: [tunnel, branches, maze, decoy], difficulty: [0.0, 0.5]}
+  - name: m2_memory
+    steps: 100000
+    <<: *memory_reward
+    env: {layout: [maze, maze, decoy, decoy, loops, loops, branches, breakdown, crack, tunnel],
+          difficulty: [0.0, 0.75], reward: {k_energy: 1.0, goal: 40.0, k_time: 0.02}}
+  - name: m3_full
+    steps: 80000
+    <<: *memory_reward
+    env: {layout: [maze, maze, decoy, decoy, loops, loops, branches, breakdown, crack, tunnel],
+          difficulty: [0.0, 1.0], vehicle: {max_current: 0.2}, reward: {k_energy: 1.0, goal: 40.0, k_time: 0.02}}

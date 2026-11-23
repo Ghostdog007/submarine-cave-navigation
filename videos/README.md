@@ -50,6 +50,12 @@ Gap follower, best memoryless PPO (mixed difficulty) and oracle side by side on 
 - `maze_follow_cam_d0.50_cave1000000.mp4`: follow camera on the memoryless PPO in the maze: it crashes into a
   90° corner at 15.7 s, the weakness the step-2 training (mixed layouts + memory) addresses.
 
+## 10_memory_caves_clean
+v3.3 memory model vs its memoryless control, v3.2, v3, a wall follower and the oracle on the memory caves (rings,
+hub; blind dives). Showcases: `rings_cave1000008_*` (only the v3.3 memory model and the oracle reach the exit) and
+`hub_cave1000000_*` (the memory model gets out in 82 s; the control times out). Full table in
+[10_memory_caves_clean/README.md](10_memory_caves_clean/README.md).
+
 ## Coming
 - Stage 7: retention memory vs memoryless on maze, branches and the other scenarios (follow camera + side by side).
 - Stage 8: sensor-failure robustness.

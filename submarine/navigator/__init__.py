@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from .nav_env import N_SLOTS, OBS, OBS_DIM, SLOT_DIM, NavigatorEnv, NavigatorEnvConfig
+from .nav_env import AUX, AUX_DIM, N_SLOTS, OBS, OBS_DIM, POS_SCALE, SLOT_DIM, NavigatorEnv, NavigatorEnvConfig
 
 
 def slot_valid(obs: np.ndarray) -> np.ndarray:
@@ -29,6 +29,30 @@ class GreedyNavigator:
         goal = np.arctan2(gs, gc)
         score = [np.cos(np.arctan2(s[k, 2], s[k, 1]) - goal) + self.w * s[k, 1] for k in front]
         return int(front[int(np.argmax(score))])
+
+
+class WallFollowerNavigator:
+    """Keep one hand on the wall: at every decision take the forward exit furthest to that side (left = largest
+    bearing); turn back only at a dead end. Ignores the goal cue, no memory. The classic reactive maze rule: it
+    reaches the exit whenever the start and the exit lie on the same wall (every simply connected cave), so a
+    memory model must beat it to show its memory matters."""
+
+    def __init__(self, side: str = "left"):
+        if side not in ("left", "right"):
+            raise ValueError("side must be 'left' or 'right'")
+        self.side = side
+        self.name = f"nav-wall-{side}"
+
+    def reset(self):
+        pass
+
+    def act(self, obs: np.ndarray) -> int:
+        s = obs[OBS["slots"]].reshape(N_SLOTS, SLOT_DIM)
+        front = [k for k in range(N_SLOTS - 1) if s[k, 0] > 0.5]
+        if not front:
+            return N_SLOTS - 1
+        b = [np.arctan2(s[k, 2], s[k, 1]) for k in front]
+        return int(front[int(np.argmax(b) if self.side == "left" else np.argmin(b))])
 
 
 class OracleNavigator:
@@ -89,5 +113,5 @@ class RandomNavigator:
         return int(self.rng.choice(valid)) if valid.size else N_SLOTS - 1
 
 
-__all__ = ["N_SLOTS", "OBS", "OBS_DIM", "SLOT_DIM", "GreedyNavigator", "NavigatorEnv", "NavigatorEnvConfig",
+__all__ = ["AUX", "AUX_DIM", "POS_SCALE", "N_SLOTS", "OBS", "OBS_DIM", "SLOT_DIM", "GreedyNavigator", "NavigatorEnv", "NavigatorEnvConfig",
            "OracleNavigator", "RandomNavigator", "slot_valid"]

@@ -25,9 +25,9 @@ import yaml
 
 
 def _worker(args):
-    base, stages, weights, n_decisions, noise, seed = args
+    base, stages, weights, n_decisions, noise, junction_noise, seed = args
     from scripts.train_navigator import stage_config
-    from submarine.navigator import NavigatorEnv, OracleNavigator, slot_valid
+    from submarine.navigator import OBS, NavigatorEnv, OracleNavigator, slot_valid
 
     rng = np.random.default_rng(seed)
     envs = [NavigatorEnv(stage_config(base, s)) for s in stages]
@@ -42,7 +42,10 @@ def _worker(args):
         start = True
         while True:
             label = teacher.act(obs)
-            if rng.random() < noise:
+            # wrong turns mostly AT junctions (memory-v3): they lead into dead ends and back, which is the
+            # experience the memory must learn from; elsewhere only occasional noise
+            p_noise = junction_noise if obs[OBS["junction"]] > 0.5 else noise
+            if rng.random() < p_noise:
                 valid = np.flatnonzero(slot_valid(obs))
                 act = int(rng.choice(valid)) if valid.size else 4
             else:
@@ -60,18 +63,24 @@ def _worker(args):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--config", default="configs/navigator.yaml")
-    p.add_argument("--decisions", type=int, default=40000)
-    p.add_argument("--noise", type=float, default=0.3)
+    p.add_argument("--decisions", type=int, default=None, help="default: bc.decisions in the config, else 40000")
+    p.add_argument("--noise", type=float, default=None, help="random-exit probability away from junctions")
+    p.add_argument("--junction-noise", type=float, default=None, help="... and at junctions")
     p.add_argument("--workers", type=int, default=20)
-    p.add_argument("--out", default="runs/nav_demos.npz")
+    p.add_argument("--out", default=None, help="default: bc.demos in the config")
     args = p.parse_args()
     C = yaml.safe_load(open(args.config))
+    bc = C.get("bc", {})
+    decisions = args.decisions or int(bc.get("decisions", 40000))
+    noise = args.noise if args.noise is not None else float(bc.get("noise", 0.3))
+    j_noise = args.junction_noise if args.junction_noise is not None else float(bc.get("junction_noise", noise))
+    args.out = args.out or bc.get("demos", "runs/nav_demos.npz")
     stages = C["stages"]
     w = np.array([s["steps"] for s in stages], float)
     w /= w.sum()
-    per = -(-args.decisions // args.workers)
+    per = -(-decisions // args.workers)
     t0 = time.perf_counter()
-    jobs = [(C["base"], stages, w, per, args.noise, 7000 + i) for i in range(args.workers)]
+    jobs = [(C["base"], stages, w, per, noise, j_noise, 7000 + i) for i in range(args.workers)]
     with ProcessPoolExecutor(args.workers) as ex:
         parts = list(ex.map(_worker, jobs))
     data = {k: np.concatenate([p_[i] for p_ in parts]) for i, k in enumerate(["obs", "label", "action", "reward",

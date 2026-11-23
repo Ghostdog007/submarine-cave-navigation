@@ -12,6 +12,27 @@ and discs, with the same wall roughness, and finished exactly like tunnels
              side fissures, some too narrow to enter
   breakdown  boulder choke after a roof collapse: a wide chamber full of rubble
 
+Memory scenarios (memory-v3): situations where the present observation misleads and only memory helps.
+  decoy      the true route detours AWAY from the exit, while long dead-end passages (beyond sonar range)
+             point straight AT it: the goal bearing recommends every decoy; only remembering one already tried
+             avoids going back in
+  loops      a maze with extra passages that close cycles: without memory an agent can circle indefinitely
+
+Memory-necessary caves (memory-v3.2). The two above turned out to be solvable WITHOUT memory: a memoryless policy
+learned a reactive exploration rule (blind: 77% success, 0.26 dead-end re-entries vs the oracle's 0.24). Wall
+following (keep one hand on the wall) solves any cave whose start and goal lie on the same wall, and every layout
+above starts and ends on the outer wall. These two defeat both reactive strategies:
+  rings      the dive starts INSIDE two concentric rings of passage around a central rock. The inner ring's only
+             way out is one gap on the side away from the exit; the exit passage leaves the outer ring. Both
+             walls at the start are islands (the central rock; the C-shaped rock between the rings), so either
+             hand on the wall circles forever, and the goal bearing keeps choosing "carry on round the ring" at
+             the gap. Escaping needs loop closure: "I have passed this junction this way before: take the other
+             exit". The start heading is random (not along the route).
+  hub        one junction chamber with 3-4 spokes. 2-3 are dead ends (8-11 m, beyond sonar range) pointing at the
+             exit; the true route leaves at ~90 deg, away from the exit. Every failed spoke brings the sub back
+             to the SAME junction, looking the same: the goal bearing re-chooses the same dead end forever; only
+             remembering which spokes were tried moves on (perceptual aliasing + forced revisits).
+
 Difficulty d in [0, 1] narrows passages, adds wiggle / roughness and clutter.
 """
 
@@ -20,7 +41,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.ndimage import distance_transform_edt
 
-LAYOUTS = ("tunnel", "maze", "branches", "crack", "breakdown")
+LAYOUTS = ("tunnel", "maze", "branches", "crack", "breakdown", "decoy", "loops", "rings", "hub")
 
 
 def _lerp(a, b, t):
@@ -80,8 +101,9 @@ def _disc(x, y, r):
 # ---------------------------------------------------------------------------- layouts
 
 
-def maze(rng, d, world):
-    """Spanning tree over a jittered 6 x 3 grid of junctions: exactly one route, the rest are dead ends."""
+def maze(rng, d, world, extra_edges: int = 0):
+    """Spanning tree over a jittered 6 x 3 grid of junctions: exactly one route, the rest are dead ends.
+    extra_edges > 0 adds that many non-tree passages, closing cycles (the "loops" layout)."""
     cols, rows = 6, 3
     xs = np.linspace(5.0, world.length - 5.0, cols)
     ys = np.linspace(7.0, world.height - 7.0, rows)
@@ -100,13 +122,17 @@ def maze(rng, d, world):
             n = parent[n]
         return n
 
-    edges = []
+    edges, spare = [], []
     for i in order:
         a, b = cand[i]
         ra, rb = root(a), root(b)
         if ra != rb:
             parent[ra] = rb
             edges.append((a, b))
+        else:
+            spare.append((a, b))
+    loops = spare[:extra_edges]                                  # random non-tree passages: each closes a cycle
+    edges = edges + loops
 
     w = _lerp(3.4, 2.2, d)
     wiggle = _lerp(0.4, 1.2, d)
@@ -118,7 +144,132 @@ def maze(rng, d, world):
     s, g = node[(0, r_start)], node[(cols - 1, r_goal)]
     segs += _segments(_path((1.0, s[1]), s, rng, 0.3), w)    # entrance and exit stubs
     segs += _segments(_path(g, (world.length - 1.0, g[1]), rng, 0.3), w)
-    return segs, [], {"junctions": len(node), "dead_ends": _leaves(edges, (0, r_start), (cols - 1, r_goal))}
+    return segs, [], {"junctions": len(node), "dead_ends": _leaves(edges, (0, r_start), (cols - 1, r_goal)),
+                      "loops": len(loops)}
+
+
+def loops(rng, d, world):
+    """Maze with 3-5 extra passages that close cycles."""
+    return maze(rng, d, world, extra_edges=int(rng.integers(3, 6)))
+
+
+def decoy(rng, d, world):
+    """The route makes a long detour away from the exit; dead ends off it point straight at the exit.
+
+    Main route: start -> the far edge of the cave (top or bottom, ~12 m from the goal's height) -> along it ->
+    up/down to the goal. From the detour, 2-3 decoy passages leave toward the goal side (35-65 deg off the
+    detour, so they are distinct passages) and end blind after 7-11 m. Decoys sit only where the goal bearing
+    is closer to the decoy's direction than to the true route's, so a goal-following navigator enters each one."""
+    L, H = world.length, world.height
+    w = _lerp(3.4, 2.4, d)
+    wiggle = _lerp(0.3, 0.8, d)
+    y_goal = H / 2 + rng.uniform(-2.0, 2.0)
+    side = rng.choice([-1.0, 1.0])
+    far = H / 2 + side * (H / 2 - 3.5)                         # the detour runs along the top or bottom edge
+    start, goal = np.array([1.0, y_goal + rng.uniform(-2, 2)]), np.array([L - 1.0, y_goal])
+    way = [start, np.array([6.0, start[1]]), np.array([10.0, far]), np.array([L - 7.0, far]),
+           np.array([L - 5.0, goal[1]]), goal]
+    main = np.vstack([_path(a, b, rng, wiggle)[:-1] for a, b in zip(way[:-1], way[1:])] + [goal[None]])
+    segs = _segments(main, w, rng, 0.1)
+    n = 2 + int(rng.random() < 0.5 + 0.5 * d)
+    made = 0
+    for xj in np.linspace(19.0, 33.0, n) + rng.uniform(-1.0, 1.0, n):
+        i = int(np.argmin(np.abs(main[:, 0] - xj) + 10.0 * (np.abs(main[:, 1] - far) > 2.0)))
+        p = main[i]
+        toward = np.sign(goal[1] - p[1])
+        goal_ang = abs(np.arctan2(goal[1] - p[1], goal[0] - p[0]))   # route runs at ~0 deg
+        ang = np.clip(max(goal_ang + rng.uniform(0.0, 0.35), np.deg2rad(35)), 0, np.deg2rad(65))
+        if abs(goal_ang - ang) >= goal_ang:
+            continue                                            # the goal bearing would not favour this decoy
+        length = min(rng.uniform(8.0, 11.0), (L - 9.0 - p[0]) / np.cos(ang),
+                     (abs(goal[1] - p[1]) + 1.0) / np.sin(ang))
+        if length < 7.0:
+            continue                                            # too short to hide its end from the sonar
+        q = p + length * np.array([np.cos(ang), toward * np.sin(ang)])
+        segs += _segments(_path(p, q, rng, 0.4), w * rng.uniform(0.85, 1.0), rng, 0.1)
+        segs.append(_disc(*q, 0.6 * w))
+        made += 1
+    return segs, [], {"decoys": made}
+
+
+def _ring(c, rx, ry, rng, wiggle, n=48):
+    """Closed ellipse of points around c, gently wobbling."""
+    t = np.linspace(0, 2 * np.pi, n + 1)
+    ph = rng.uniform(0, 2 * np.pi, 2)
+    k = 1 + wiggle * 0.04 * (np.sin(2 * t + ph[0]) + np.sin(3 * t + ph[1]))
+    return np.stack([c[0] + rx * k * np.cos(t), c[1] + ry * k * np.sin(t)], 1)
+
+
+def rings(rng, d, world):
+    """Start inside two concentric rings (see the module docstring)."""
+    L, H = world.length, world.height
+    w = _lerp(3.0, 2.4, d)
+    c = np.array([rng.uniform(19.0, 22.0), H / 2 + rng.uniform(-1.0, 1.0)])
+    ri = np.array([rng.uniform(5.5, 6.5), rng.uniform(4.5, 5.0)])            # inner ring radii
+    ro = ri + rng.uniform(6.8, 7.4)                                          # outer ring: >= 3 m of rock between
+    ro[1] = min(ro[1], H / 2 - 2.6)
+    wig = _lerp(0.3, 1.0, d)
+    segs = _segments(_ring(c, *ri, rng, wig), w) + _segments(_ring(c, *ro, rng, wig), w)
+    a_gap = np.pi + rng.uniform(-0.6, 0.6)                                   # the inner ring's only way out
+    u = np.array([np.cos(a_gap), np.sin(a_gap)])
+    segs += _segments(_path(c + ri * u * 0.98, c + ro * u * 1.02, rng, 0.2), w)
+    a_exit = rng.uniform(-0.5, 0.5)                                          # the exit leaves the outer ring
+    p = c + ro * np.array([np.cos(a_exit), np.sin(a_exit)])
+    y_goal = np.clip(p[1] + rng.uniform(-4.0, 4.0), 6.0, H - 6.0)
+    segs += _segments(_path(p, (L - 1.0, y_goal), rng, 0.6), w)
+    a_start = rng.uniform(-0.6, 0.6)                                         # on the inner ring, facing the exit
+    start = c + ri * np.array([np.cos(a_start), np.sin(a_start)])
+    tangent = a_start + np.pi / 2 * rng.choice([-1.0, 1.0])                  # random way round
+    return segs, [], {"start_xy": (float(start[0]), float(start[1])), "start_heading": float(tangent),
+                      "gap_deg": float(np.degrees(a_gap)), "exit_deg": float(np.degrees(a_exit))}
+
+
+def hub(rng, d, world):
+    """A junction chamber with dead-end spokes pointing at the exit (see the module docstring)."""
+    L, H = world.length, world.height
+    w = _lerp(3.2, 2.4, d)
+    wiggle = _lerp(0.3, 0.7, d)
+    hubp = np.array([rng.uniform(13.0, 16.0), H / 2 + rng.uniform(-2.0, 2.0)])
+    y_goal = H / 2 + rng.uniform(-2.0, 2.0)
+    side = rng.choice([-1.0, 1.0])
+    far = H / 2 + side * (H / 2 - 3.5)
+    start = np.array([1.0, hubp[1] + rng.uniform(-3.0, 3.0)])
+    segs = _segments(_path(start, hubp, rng, wiggle), w)                    # entrance
+    a_true = side * rng.uniform(np.deg2rad(80), np.deg2rad(100))             # the true route: away from the exit
+    turn = hubp + 6.0 * np.array([np.cos(a_true), np.sin(a_true)])
+    way = [hubp, turn, np.array([turn[0] + 3.0, far]), np.array([L - 7.0, far]), np.array([L - 5.0, y_goal]),
+           np.array([L - 1.0, y_goal])]
+    for a, b in zip(way[:-1], way[1:]):
+        segs += _segments(_path(a, b, rng, wiggle), w)
+    segs.append(_disc(*hubp, 0.85 * w))                                      # the chamber
+    n_dead = 2 + int(rng.random() < 0.5 + 0.5 * d)
+    angles, made = [], 0
+    for _ in range(40):
+        if made >= n_dead:
+            break
+        a = rng.uniform(np.deg2rad(-55), np.deg2rad(55))                     # toward the exit
+        if any(abs(a - b) < np.deg2rad(32) for b in angles) or abs(a - a_true) < np.deg2rad(40):
+            continue
+        u = np.array([np.cos(a), np.sin(a)])
+        length = rng.uniform(8.0, 11.0)
+        if np.sign(u[1]) == side and abs(u[1]) > 1e-6:                        # keep clear of the true route
+            length = min(length, (abs(far - hubp[1]) - 5.0) / abs(u[1]))
+        if length < 7.0:
+            continue
+        q = hubp + length * u
+        segs += _segments(_path(hubp, q, rng, 0.3), w * rng.uniform(0.9, 1.0))
+        segs.append(_disc(*q, 0.6 * w))
+        angles.append(a)
+        made += 1
+    back = rng.random() < 0.7                 # a dead spoke BEHIND the true route: the hand on that side tries it
+    if back:                                  # first, so neither wall follower gets the true route first
+        a = side * rng.uniform(np.deg2rad(135), np.deg2rad(148))
+        u = np.array([np.cos(a), np.sin(a)])
+        length = min(rng.uniform(7.5, 9.5), (abs(far - hubp[1]) - 4.5) / abs(u[1]))
+        q = hubp + length * u
+        segs += _segments(_path(hubp, q, rng, 0.3), w * rng.uniform(0.9, 1.0))
+        segs.append(_disc(*q, 0.6 * w))
+    return segs, [], {"dead_spokes": made + int(back), "back_spoke": int(back), "true_deg": float(np.degrees(a_true))}
 
 
 def _leaves(edges, start, goal):
@@ -226,7 +377,8 @@ def breakdown(rng, d, world):
     return segs, boulders, {"boulders": len(boulders)}
 
 
-BUILDERS = {"maze": maze, "branches": branches, "crack": crack, "breakdown": breakdown}
+BUILDERS = {"maze": maze, "branches": branches, "crack": crack, "breakdown": breakdown, "decoy": decoy,
+            "loops": loops, "rings": rings, "hub": hub}
 
 
 def build_free(rng, cfg, world, noise):

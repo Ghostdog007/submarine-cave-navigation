@@ -42,12 +42,28 @@ class HandController:
     def __init__(self, cfg: ControllerConfig, vehicle: VehicleConfig, angles: np.ndarray, max_range: float):
         self.cfg, self.v = cfg, vehicle
         self.angles, self.max_range = np.asarray(angles, float), max_range
+        self._scan = None                     # (ranges array, its copy, reach, front, side minima) of the last scan
+
+    def _scan_terms(self, ranges: np.ndarray):
+        """Terms that depend on the scan only. The driver holds one ranges array per ping (4 steps at 0.4 s
+        pings), so they are computed once per scan and reused while the same, unmodified array comes back."""
+        s = self._scan
+        if s is not None and s[0] is ranges and np.array_equal(s[1], ranges):
+            return s[2:]
+        c, th = self.cfg, self.angles
+        reach = corridor_ranges(ranges, th, c.half_width, self.max_range)
+        left = ranges[(th > np.deg2rad(30)) & (th < np.deg2rad(120))]
+        right = ranges[(th < -np.deg2rad(30)) & (th > -np.deg2rad(120))]
+        side = (float(left.min()), float(right.min())) if left.size and right.size else None
+        front = corridor_front(ranges, th, c.half_width, self.max_range)
+        self._scan = (ranges, ranges.copy(), reach, front, side)
+        return reach, front, side
 
     def act(self, ranges: np.ndarray, u: float, r: float, bearing: float, speed: float) -> tuple[np.ndarray, float]:
         """([thrust, yaw], chosen direction in the body frame)."""
         c, v, th = self.cfg, self.v, self.angles
         ranges = np.asarray(ranges, float)
-        reach = corridor_ranges(ranges, th, c.half_width, self.max_range)
+        reach, front, side = self._scan_terms(ranges)
         dev = np.abs(wrap(th - bearing))
         cand = dev <= np.deg2rad(c.search_deg)
         if not cand.any():
@@ -56,18 +72,15 @@ class HandController:
         target = float(th[int(np.argmax(score))])
 
         yaw = c.k_yaw * target - c.k_damp * r
-        left = ranges[(th > np.deg2rad(30)) & (th < np.deg2rad(120))]
-        right = ranges[(th < -np.deg2rad(30)) & (th > -np.deg2rad(120))]
-        if left.size and right.size:
-            yaw += c.k_side * (1 / max(right.min(), 0.3) - 1 / max(left.min(), 0.3))
+        if side is not None:
+            yaw += c.k_side * (1 / max(side[1], 0.3) - 1 / max(side[0], 0.3))
 
-        front = corridor_front(ranges, th, c.half_width, self.max_range)
         if abs(target) > np.deg2rad(c.behind_deg):
             v_des = 0.0                                         # turn in place toward the way back
         else:
-            room = np.clip((front - c.stop) / (c.slow - c.stop), 0.0, 1.0)
+            room = min(1.0, max(0.0, (front - c.stop) / (c.slow - c.stop)))
             v_des = min(speed, v.u_max * room * max(0.0, np.cos(target)))
         thrust = v.k_u * v_des / v.a_max + c.k_speed * (v_des - u)
         if front < c.stop:
             thrust = min(thrust, -0.5)
-        return np.array([np.clip(thrust, -1, 1), np.clip(yaw, -1, 1)], dtype=np.float32), target
+        return np.array([min(1.0, max(-1.0, thrust)), min(1.0, max(-1.0, yaw))], dtype=np.float32), target

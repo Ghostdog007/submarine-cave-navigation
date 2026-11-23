@@ -35,6 +35,8 @@ class NavigationConfig:
     min_gap_beams: int = 2            # an opening must span at least this many beams
     rear_deg: float = 135.0           # openings centred beyond +-rear_deg (behind) are ignored
     min_write_spacing: float = 2.0    # m
+    junction_flags: bool = True       # count openings every step for the junction / dead-end flags (end-to-end
+                                      # agents); the navigator has its own detector and switches this off (~11%)
 
 
 class PathIntegrator:

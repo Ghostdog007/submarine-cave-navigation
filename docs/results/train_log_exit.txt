@@ -1,0 +1,17 @@
+[06:29:13] variant=exit: 87275 parameters, state 800 floats/env, 32 envs on 5 workers, stages ['m1_core', 'm2_memory', 'm3_full']
+[06:33:59] warm start epoch 1: train NLL 0.610 aux 1.064 | held-out NLL 0.376 aux 0.899 teacher agreement 87%
+[06:38:18] warm start epoch 2: train NLL 0.346 aux 0.887 | held-out NLL 0.335 aux 0.756 teacher agreement 88%
+[06:42:11] warm start epoch 3: train NLL 0.322 aux 0.716 | held-out NLL 0.323 aux 0.574 teacher agreement 88%
+[06:45:58] warm start epoch 4: train NLL 0.313 aux 0.570 | held-out NLL 0.312 aux 0.545 teacher agreement 88%
+[06:49:43] warm start epoch 5: train NLL 0.305 aux 0.483 | held-out NLL 0.310 aux 0.419 teacher agreement 88%
+[06:53:29] warm start epoch 6: train NLL 0.299 aux 0.436 | held-out NLL 0.300 aux 0.391 teacher agreement 89%
+[06:57:06] warm start epoch 7: train NLL 0.292 aux 0.416 | held-out NLL 0.294 aux 0.370 teacher agreement 89%
+[07:00:39] warm start epoch 8: train NLL 0.287 aux 0.387 | held-out NLL 0.292 aux 0.363 teacher agreement 89%
+[07:04:11] warm start epoch 9: train NLL 0.282 aux 0.376 | held-out NLL 0.285 aux 0.347 teacher agreement 89%
+[07:07:43] warm start epoch 10: train NLL 0.279 aux 0.379 | held-out NLL 0.280 aux 0.346 teacher agreement 89%
+[07:11:16] variant=exit: 87275 parameters, state 800 floats/env, 30 envs on 5 workers, stages ['m1_core', 'm2_memory', 'm3_full']
+[07:11:16] initialised from runs/memnav_exit/b0_warm_start.pt (warm start skipped)
+[07:58:29] stage m1_core: 60000 decisions in 46.8 min (21/s), episode reward 28.2, decisions/episode 43, success 79%
+[09:13:11] stage m2_memory: 100000 decisions in 74.5 min (22/s), episode reward 22.1, decisions/episode 51, success 70%
+[09:55:03] stage m3_full: 80000 decisions in 41.7 min (32/s), episode reward 19.4, decisions/episode 42, success 56%
+[09:55:04] done

@@ -48,7 +48,15 @@ def pick_caves(csv_files, layouts):
 
 
 def _record(args):
-    nav_name, config, layout, seed, difficulty, out_dir, speed = args
+    nav_name, config, layout, seed, difficulty, out_dir, speed, reward_stage, *rest = args
+    no_cue = bool(rest and rest[0])
+    import json
+
+    short = Path(nav_name).name if Path(nav_name).exists() else nav_name
+    out = Path(out_dir) / f"{layout}_cave{seed}_{short}{'_blind' if no_cue else ''}.mp4"
+    side = out.with_suffix(".json")                          # outcome sidecar: lets an interrupted run resume
+    if out.exists() and side.exists():
+        return json.loads(side.read_text(encoding="utf-8"))
     import yaml
 
     from scripts.eval_navigator import make_navigator
@@ -59,14 +67,20 @@ def _record(args):
     C = yaml.safe_load(open(config))
     env = EnvConfig.from_yaml("configs/eval_layouts.yaml").to_dict()
     base = {k: v for k, v in C["base"].items() if k != "env"}
+    if reward_stage:                                         # that stage's reward (shown live), same caves and cue
+        st = next(s_ for s_ in C["stages"] if s_["name"] == reward_stage)
+        base.update({k: v for k, v in st.items() if k not in ("name", "steps", "env", "goal_cue_prob")})
+        env = {**env, "reward": {**env.get("reward", {}), **st.get("env", {}).get("reward", {})}}
+    if no_cue:                                               # blind dive: memory (and the exploration bonus) only
+        base["goal_cue_prob"] = 0.0
     cfg = NavigatorEnvConfig.from_dict({**base, "env": env})
     nav = make_navigator(nav_name)
-    short = Path(nav_name).name if Path(nav_name).exists() else nav_name
-    out = Path(out_dir) / f"{layout}_cave{seed}_{short}.mp4"
     r = record_nav_replay(nav, cfg, layout, seed, difficulty, out, speed=speed)
-    return {"layout": layout, "seed": seed, "navigator": short, "file": out.name, "outcome": r["outcome"],
-            "time": round(r["time"], 1), "decisions": r["decisions"], "stored": r["stored"],
-            "unexplained": r["unexplained"]}
+    res = {"layout": layout, "seed": seed, "navigator": short, "file": out.name, "outcome": r["outcome"],
+           "time": round(r["time"], 1), "decisions": r["decisions"], "stored": r["stored"],
+           "unexplained": r["unexplained"]}
+    side.write_text(json.dumps(res), encoding="utf-8")       # written last: only finished videos are skipped
+    return res
 
 
 def main():
@@ -80,22 +94,33 @@ def main():
     p.add_argument("--out", required=True)
     p.add_argument("--speed", type=float, default=4.0)
     p.add_argument("--workers", type=int, default=5)
+    p.add_argument("--reward-stage", default=None, help="use (and display) this training stage's reward, e.g. "
+                                                        "m3_full with configs/memnav_reward.yaml")
+    p.add_argument("--no-cue", action="store_true", help="blind dives: no goal bearing (files end in _blind)")
     args = p.parse_args()
 
     picks = pick_caves(args.csv, args.layouts)
     for e in args.extra:
         lay, seed = e.split(":")
-        picks[f"{lay} (extra)"] = (int(seed), "requested")
-    jobs = [(n, args.config, lay.split(" ")[0], seed, args.difficulty, args.out, args.speed)
+        key = f"{lay} (extra)" if f"{lay} (extra)" not in picks else f"{lay} (extra {seed})"   # two extras of a type
+        picks[key] = (int(seed), "requested")
+    jobs = [(n, args.config, lay.split(" ")[0], seed, args.difficulty, args.out, args.speed, args.reward_stage, args.no_cue)
             for lay, (seed, _) in picks.items() for n in args.navigators]
     Path(args.out).mkdir(parents=True, exist_ok=True)
-    with ProcessPoolExecutor(args.workers) as ex:
+    with ProcessPoolExecutor(args.workers) as ex:     # (max_tasks_per_child hung the pool on Python 3.12)
         res = list(ex.map(_record, jobs))
     lines = ["# Comparison replays", "",
              "Every navigator on the same test cave per cave type (same seed, difficulty d = "
              f"{args.difficulty}, sensor noise and currents). Caves chosen from the evaluation as the hardest "
              "one the oracle solves. Memory displays are checked against the agent's stored state "
              "(unexplained must be 0).", "",
+             "Markers (memory-v3 navigators): the badge names the architecture. Store variants show stored junction "
+             "departures (ring #n) and dead ends (red X #n), lines to the entries recalled for the current choice and "
+             "a yellow pulse on the strongest. Every v3 variant shows its belief heads: DEAD? n% on an exit it "
+             "believes leads to a known dead end, BEEN n% on one it believes it already took, an orange ring while "
+             "it believes it is revisiting a place; the log lists AVOIDED / ENTERED-despite decisions. With "
+             "--reward-stage, a fourth status line shows the dive's reward, repeat PENALTY events and the "
+             "exploration bonus (+n new area).", "",
              "| Cave type | Cave | Why this cave | Navigator | Outcome | Time (s) | Decisions | Memories stored | "
              "Display check | File |", "|---|---|---|---|---|---|---|---|---|---|"]
     for lay, (seed, why) in picks.items():

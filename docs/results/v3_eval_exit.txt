@@ -1,0 +1,24 @@
+﻿
+layout     policy            success  breach  timeout  t_goal     kJ  decide   hull  DE in  re-ent  back m  avoid  
+untried
+-----------------------------------------------------------------------------------------------------------------------
+---
+tunnel     memnav_exit          100%      0%       0%    55.3   15.4    35.8  100.0   1.73    0.63     2.1     0%      
+ 3%
+maze       memnav_exit           47%      0%      53%    79.3   32.5    64.7  100.0   1.77    0.60    31.8    52%      
+ 9%
+branches   memnav_exit           77%      0%      23%    54.1   20.7    41.8  100.0   1.27    0.70    15.6    51%      
+ 4%
+crack      memnav_exit           93%      0%       7%    67.6   20.5    37.1  100.0   0.00    0.00     5.2    30%      
+ 0%
+breakdown  memnav_exit           47%      0%      53%    64.3   30.2    70.6  100.0   2.83    1.63    21.1    56%      
+ 7%
+decoy      memnav_exit          100%      0%       0%    55.2   14.8    30.8  100.0   0.07    0.00     0.1   nan%      
+ 0%
+loops      memnav_exit           67%      0%      33%    63.3   25.5    51.8  100.0   1.47    0.30    21.2    41%      
+ 5%
+avoid: % of choices avoiding an exit known (true history) to lead to an explored dead end; untried: % of choices at 
+revisited junctions taking an exit not taken before
+saved runs\eval\v3_eval_exit_episodes.csv
+
+

@@ -1,0 +1,136 @@
+# memory-v3.3: the v3.2 model (event gate + belief bias) and v3.1 reward, TRAINED on the memory-necessary caves
+# (rings, hub) as well, with v3.2's exact training settings. Only the cave mix and the demos differ from v3.2.
+#   python -m scripts.collect_nav_demos --config configs/memnav_caves_clean.yaml --workers 8 --out runs/memnav_c_demos.npz
+#   python -m scripts.train_memnav --config configs/memnav_caves_clean.yaml --variant exit   # -> runs/memnav_cc_exit
+#   python -m scripts.train_memnav --config configs/memnav_caves_clean.yaml --variant none   # -> runs/memnav_cc_none
+#
+# Why: on the old training caves a reactive rule is enough, so RL pruned memory (v3.2: memory changed 39% -> 7% of
+# choices at known dead ends). On rings / hub every reactive rule fails (greedy 5-20%, wall following 37-42%,
+# oracle 100%). Stage mixes: rings and hub are a third of stages 2-3; hub (goal cue on) joins stage 1.
+# Training settings are v3.2's (30 envs on 5 workers, minibatches of 8, warm start in 8 lanes / 10 epochs / lr 1e-3,
+# 2 learner threads): a faster setup (60 envs, bigger minibatches and warm-start batches) was tried and dropped, as
+# it trained worse. The only speed-up kept is exact: batched-matmul memory reads (same outputs to 3e-5).
+#
+# ---- v3.2 notes (configs/memnav_event.yaml) ----
+# memory-v3.2: the v3.1 reward + an EVENT-TRIGGERED per-exit memory gate and a belief bias on the exit scores.
+#   python -m scripts.train_memnav --config configs/memnav_event.yaml --variant exit
+# Runs land in runs/memnav_e_<variant>. Same demos as v3.1 (runs/memnav_r_demos.npz).
+#
+# Why: in v3/v3.1 the scalar gate never moved (0.17, then 0.53 flat): it is a redundant scale on features the scorer
+# can rescale itself, so it carried no learning signal; and nothing tied the aux heads' beliefs (dead-end recall
+# ~0.9) to the choice. v3.2 (submarine/memory/exitmem.py):
+#   gate: event        one gate per exit from trigger events: dead end hit recently, recent turn-back, no new ground
+#                      (decaying traces in the recurrent state), revisit belief, entries stored nearby, no goal cue,
+#                      junction, and the exit's own dead-end / taken beliefs and rule strengths
+#   belief_bias: true  exit score += g_k * (w_dead * p_dead_k + w_taken * p_taken_k), w learnable from (-2, -0.5)
+# Logged: memory/reliance_kl_* and memory/choice_change_* (the decision with the memory read zeroed), by situation
+# (known_dead / revisit / fresh), and memory/gate_* (the mean event gate there).
+#
+# ---- v3.1 notes (configs/memnav_reward.yaml) ----
+# memory-v3.1: the same exit-memory navigators, trained with a reward that PRICES forgetting.
+#   python -m scripts.collect_nav_demos --config configs/memnav_reward.yaml   # new demos: fixed labels (~10 min)
+#   python -m scripts.train_memnav --config configs/memnav_reward.yaml --variant exit   (and none: the control)
+# Runs land in runs/memnav_r_<variant> (run_prefix), next to the v3 runs.
+#
+# Why (docs/memory_v3.md, "Why memory went unused"): with dense geodesic progress, a dead-end detour is refunded on
+# the way out and costs only its time and energy (~5 reward vs ~+57 for a success), the map flags a wrong branch
+# the moment it is entered, and 70% of dives showed the goal bearing. A memoryless policy collected nearly all the
+# reward, so the memory gate never opened (0.17). Changes, all from stage 2 on (stage 1 keeps the dense reward to
+# learn the basics fast):
+#   progress: record             paid only for beating the best geodesic so far: no entry signal, no refund
+#   repeat_dead_penalty: 1.5     choosing an exit that already led to a dead end (a detour itself costs ~5)
+#   repeat_taken_penalty: 0.3    re-taking an exit already taken from here while an untried one exists HERE
+#   (both small nudges, forward exits only: turning back / driving back through explored tunnels to a far
+#    junction is never penalised; reaching new ground there pays the exploration bonus)
+#   dead_end_revisit_penalty: 1.5  back at the tip of a dead end already reached and left (>= 4 m): re-entry by any
+#                                  route, incl. turning back in its corridor (v3 models: 0.55 re-entries per dive,
+#                                  the same as greedy; corridors have no junction, so the exit penalty misses it)
+#   dither_penalty: 0.3          turning back again within 2 decisions, no junction in between (the U-turn loop)
+#   explore_bonus: 0.5           per new 2 m cell, only in dives without the goal cue
+#   goal 20 -> 40, k_time 0.01 -> 0.02 per step: a timeout is clearly worse than finishing
+#   goal_cue_prob 0.7 -> 0.3
+# Also: labels fixed (a departure counts as "taken" only after the sub has come back; a dead end belongs to the
+# departure that led straight to it), memory gate starts at 0.5 instead of 0.12.
+seed: 0
+run_prefix: memnav_cc
+n_envs: 30
+envs_per_worker: 6
+model:
+  d_model: 64
+  gru: 64
+  n_entries: 32
+  memo: 16
+  hidden: 64
+  merge_radius: 1.5
+  sigma: 2.0
+  ray_length: 14.0
+  gate_init: 0.0                  # every exit's gate starts at 0.5 (zero-initialised gate network)
+  gate: event
+  belief_bias: true
+  bias_init: [-2.0, -0.5]
+  event_decay: 0.6
+
+ppo:
+  n_steps: 64
+  epochs: 4
+  minibatch_envs: 8
+  lr: 3.0e-4
+  gamma: 0.99
+  lam: 0.95
+  clip: 0.2
+  ent: 0.01
+  vf: 0.5
+  aux_start: 0.5
+  aux_end: 0.1
+  max_grad: 0.5
+  target_kl: 0.03
+
+bc:
+  demos: runs/memnav_c_demos.npz  # v3.3's teacher demos, including rings and hub
+  decisions: 60000
+  noise: 0.1
+  junction_noise: 0.35
+  epochs: 10
+  lanes: 8
+  seq_len: 64
+  lr: 1.0e-3
+  vf_coef: 0.05
+  aux_weight: 0.5
+
+base:
+  driver_actor: runs/driver/driver.npz
+  cruise_speed: 1.2
+  empty_slot: remap
+  aux_labels: true
+  goal_cue_prob: 1.0
+  env:
+    max_steps: 1500
+    sonar: {ping_interval: 0.4}
+    reward: {k_energy: 1.0}
+
+memory_reward: &memory_reward     # stages 2-3
+  progress: record
+  repeat_dead_penalty: 1.5
+  repeat_taken_penalty: 0.3
+  dead_end_revisit_penalty: 1.5
+  dither_penalty: 0.3
+  explore_bonus: 0.5
+  explore_cell: 2.0
+  explore_without_cue_only: true
+  goal_cue_prob: 0.3
+
+stages:
+  - name: m1_core                 # dense reward, goal cue always: the basics
+    steps: 60000
+    goal_cue_prob: 1.0
+    env: {layout: [tunnel, branches, maze, decoy, hub], difficulty: [0.0, 0.5]}
+  - name: m2_memory
+    steps: 100000
+    <<: *memory_reward
+    env: {layout: [rings, rings, hub, hub, maze, decoy, loops, loops, branches, breakdown, crack, tunnel],
+          difficulty: [0.0, 0.75], reward: {k_energy: 1.0, goal: 40.0, k_time: 0.02}}
+  - name: m3_full
+    steps: 80000
+    <<: *memory_reward
+    env: {layout: [rings, rings, hub, hub, maze, decoy, loops, loops, branches, breakdown, crack, tunnel],
+          difficulty: [0.0, 1.0], vehicle: {max_current: 0.2}, reward: {k_energy: 1.0, goal: 40.0, k_time: 0.02}}

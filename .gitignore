@@ -10,3 +10,5 @@ videos/**/*.mp4
 .pytest_cache/
 *.egg-info/
 
+# per-video outcome sidecars (compare_videos resumes from them)
+videos/**/*.json
